@@ -188,6 +188,7 @@ class SleeperPlaywrightTransport:
         self.page = page
         self.board = board
         self.target = target
+        self._last_change_token: int | None = None
 
     def observe_visible_draft_room(self) -> BrowserObservation:
         """Read one coherent visible-DOM snapshot and normalize it fail-closed."""
@@ -204,7 +205,44 @@ class SleeperPlaywrightTransport:
                 BrowserBlockerKind.UNRESPONSIVE,
                 "Sleeper DOM read returned no structured snapshot.",
             )
+        marker = raw.get("changeToken")
+        if isinstance(marker, int):
+            self._last_change_token = marker
         return observation_from_dom_snapshot(raw, self.board, self.target)
+
+    def wait_for_visible_draft_change(self, timeout_seconds: float) -> bool:
+        """Wait, bounded, for a rendered draft-board mutation.
+
+        This only wakes the next full observation sooner; it is never evidence
+        by itself for a draft action. A timeout falls back to normal polling.
+        """
+
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        try:
+            if self._last_change_token is None:
+                marker = self.page.evaluate(_DRAFT_CHANGE_TOKEN_SCRIPT)
+                if not isinstance(marker, int):
+                    raise SleeperPlaywrightTransportError("Sleeper change watcher returned no token.")
+                self._last_change_token = marker
+            changed = self.page.wait_for_function(
+                _DRAFT_CHANGE_WAIT_SCRIPT,
+                arg=self._last_change_token,
+                timeout=max(1, round(timeout_seconds * 1_000)),
+            )
+            marker = changed.json_value()
+            if not isinstance(marker, int):
+                raise SleeperPlaywrightTransportError("Sleeper change watcher returned an invalid token.")
+            self._last_change_token = marker
+            return True
+        except Exception as error:
+            if type(error).__name__ == "TimeoutError":
+                return False
+            if isinstance(error, SleeperPlaywrightTransportError):
+                raise
+            raise SleeperPlaywrightTransportError(
+                f"Sleeper draft-change watcher failed: {type(error).__name__}."
+            ) from error
 
     def reveal_player_row(self, player_name: str) -> None:
         """Use Sleeper's named player search; this never submits a draft pick."""
@@ -577,7 +615,24 @@ def _next_our_pick(current_pick_number: int, target: SleeperBrowserTarget) -> in
     )
 
 
+_DRAFT_CHANGE_TOKEN_SCRIPT = """() => {
+  const key = '__sleeperDraftChangeTracker';
+  if (!window[key]) {
+    const tracker = { token: 0 };
+    const observer = new MutationObserver(() => { tracker.token += 1; });
+    observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+    window[key] = tracker;
+  }
+  return window[key].token;
+}"""
+
+_DRAFT_CHANGE_WAIT_SCRIPT = """(expectedToken) => {
+  const tracker = window.__sleeperDraftChangeTracker;
+  return tracker && tracker.token !== expectedToken ? tracker.token : false;
+}"""
+
 _DOM_SNAPSHOT_SCRIPT = f"""() => {{
+  const changeToken = ({_DRAFT_CHANGE_TOKEN_SCRIPT})();
   const text = (node) => (node && node.innerText ? node.innerText : '').trim();
   const rows = Array.from(document.querySelectorAll('{_PLAYER_ROW}')).map((row) => ({{
     text: text(row),
@@ -592,6 +647,7 @@ _DOM_SNAPSHOT_SCRIPT = f"""() => {{
   }}));
   return {{
     url: window.location.href,
+    changeToken,
     bodyText: text(document.body),
     draftCells,
     playerRows: rows,

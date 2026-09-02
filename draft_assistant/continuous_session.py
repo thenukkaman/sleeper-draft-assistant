@@ -156,7 +156,19 @@ class ContinuousDraftSession:
                     "Controlled rehearsal cycle limit reached.",
                     cycle,
                 )
-            self.pause(self.profile.interval_after(cycle))
+            self._wait_for_next_observation(room, self.profile.interval_after(cycle))
+
+    def _wait_for_next_observation(self, room: DraftRoom, interval_seconds: float) -> None:
+        """Prefer a rendered-board signal, retaining deterministic fallback polling."""
+
+        wait_for_change = getattr(room, "wait_for_change", None)
+        if not callable(wait_for_change):
+            self.pause(interval_seconds)
+            return
+        if wait_for_change(interval_seconds):
+            # Prevent a hot loop if the page is actively rendering while still
+            # waking materially sooner than the ordinary cadence.
+            self.pause(0.01)
 
     def _termination_for(self, cycle: PollCycle) -> SessionTermination | None:
         observation = cycle.attempt.final_observation if cycle.attempt and cycle.attempt.final_observation else cycle.observation
