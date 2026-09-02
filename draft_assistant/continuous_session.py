@@ -177,16 +177,10 @@ class ContinuousDraftSession:
         recovery = attempt.auto_pick_recovery
         if recovery is not None and not recovery.recovered:
             return SessionTermination.AUTO_PICK_RECOVERY_FAILED
-        if attempt.acted and not attempt.confirmed:
-            return SessionTermination.UNVERIFIED_ACTION
-
-        # An unsuccessful transaction is actionable only if the latest
-        # observation still says our active drafting clock is live.  If it
-        # advanced, the incident is captured and the next future pick remains
-        # worth protecting.
-        still_our_pick = observation.current_pick_number == observation.our_pick_number
-        if not attempt.acted and observation.draft_status == "drafting" and still_our_pick:
-            return SessionTermination.ACTION_BLOCKED
+        # An unverified or blocked player transaction is quarantined by the
+        # runner for this clock.  Keep the session observing every cadence so
+        # it can record the clock outcome and protect all later picks, but do
+        # not make a second player selection for the quarantined clock.
         return None
 
     @staticmethod

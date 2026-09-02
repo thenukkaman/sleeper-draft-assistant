@@ -120,6 +120,7 @@ class PersistentDraftRunner:
         self.now = now
         self.prepared_pick: PreparedPick | None = None
         self._last_poll_completed_at: datetime | None = None
+        self._quarantined_pick_number: int | None = None
 
     def poll_once(self, room: DraftRoom) -> PollCycle:
         """Observe once, prepare ahead, or execute the already-ready decision."""
@@ -128,6 +129,20 @@ class PersistentDraftRunner:
         observation = room.observe()
         observed_at = self.now()
         previous_poll_completed_at = self._last_poll_completed_at
+
+        if self._quarantined_pick_number != observation.current_pick_number:
+            self._quarantined_pick_number = None
+        if self._quarantined_pick_number == observation.current_pick_number:
+            # A prior player action on this exact clock was unsuccessful or
+            # ambiguous.  Keep emitting fresh state snapshots, but do not
+            # generate a second player click.  When Sleeper advances, the
+            # quarantine clears automatically and normal preplanning resumes.
+            self._prepare_from(observation)
+            completed_at = self.now()
+            snapshot = self._snapshot(observation, observed_at, completed_at, None)
+            self._record_snapshot(snapshot)
+            self._last_poll_completed_at = completed_at
+            return PollCycle(observation, self.prepared_pick, None, None, snapshot)
 
         if not self._requires_transaction(observation):
             self._prepare_from(observation)
@@ -144,12 +159,33 @@ class PersistentDraftRunner:
             # the final time; it is the one that immediately precedes dispatch.
             events[name] = at
 
-        attempt = self.driver.run_once(
-            room,
-            prepared=self.prepared_pick,
-            initial_observation=observation,
-            record_event=record_event,
-        )
+        try:
+            attempt = self.driver.run_once(
+                room,
+                prepared=self.prepared_pick,
+                initial_observation=observation,
+                record_event=record_event,
+            )
+        except Exception as error:
+            # Preserve the monitor loop when a browser action path fails.  The
+            # fresh read is evidence only; it is never used to retry a player
+            # action on this clock.
+            try:
+                final_observation = room.observe()
+            except Exception:
+                final_observation = observation
+            recommendation = self.policy.recommend(self.board, final_observation.to_state())
+            gate = self.driver.guard.evaluate(final_observation.to_state(), recommendation)
+            attempt = DraftAttempt(
+                False,
+                False,
+                None,
+                recommendation,
+                gate,
+                f"Draft action path raised {type(error).__name__}; monitor this clock but do not retry a player action.",
+                final_observation=final_observation,
+                quarantined=True,
+            )
         telemetry = self._to_telemetry(
             observation=observation,
             attempt=attempt,
@@ -167,6 +203,12 @@ class PersistentDraftRunner:
         # This also prevents an auto-pick recovery or stale-clock branch from
         # persisting the pre-recovery observation as if it were current.
         final_observation = attempt.final_observation or observation
+        if (
+            observation.current_pick_number == observation.our_pick_number
+            and observation.draft_status == "drafting"
+            and not attempt.confirmed
+        ):
+            self._quarantined_pick_number = observation.current_pick_number
         self._prepare_from(final_observation)
         completed_at = self.now()
         snapshot = self._snapshot(final_observation, observed_at, completed_at, attempt)
@@ -232,6 +274,8 @@ class PersistentDraftRunner:
     def _outcome(attempt: DraftAttempt) -> str:
         if attempt.confirmed:
             return "confirmed"
+        if attempt.quarantined:
+            return "quarantined"
         if attempt.auto_pick_recovery and attempt.auto_pick_recovery.pick_was_missed:
             return "missed"
         if attempt.acted:

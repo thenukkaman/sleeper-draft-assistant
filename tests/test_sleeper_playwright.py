@@ -19,7 +19,7 @@ class _Button:
     def is_visible(self) -> bool:
         return True
 
-    def click(self) -> None:
+    def click(self, **kwargs) -> None:
         self.clicks += 1
 
 
@@ -40,8 +40,8 @@ class _Locator:
     def is_visible(self) -> bool:
         return len(self.items) == 1 and self.items[0].is_visible()
 
-    def click(self) -> None:
-        self.items[0].click()
+    def click(self, **kwargs) -> None:
+        self.items[0].click(**kwargs)
 
 
 class _Row:
@@ -79,6 +79,13 @@ class _Page:
     def get_by_role(self, role: str, **kwargs) -> _Locator:
         self.last_role = (role, kwargs)
         return _Locator([self.auto_off])
+
+    def get_by_text(self, text: str, **kwargs) -> _Locator:
+        self.last_text = (text, kwargs)
+        return _Locator([self.auto_off])
+
+    def wait_for_timeout(self, milliseconds: int) -> None:
+        self.waits = getattr(self, "waits", []) + [milliseconds]
 
 
 class SleeperPlaywrightParserTests(unittest.TestCase):
@@ -199,7 +206,7 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
 
         self.assertEqual(button.clicks, 0)
 
-    def test_transport_only_uses_the_semantic_auto_pick_off_button(self) -> None:
+    def test_transport_only_uses_the_exact_visible_auto_pick_off_control(self) -> None:
         button = _Button()
         page = _Page(_Row("Josh Allen\nQB BUF", _Button()), _Locator([object()]), button)
         transport = SleeperPlaywrightTransport(page, self.board, self.target)
@@ -207,7 +214,7 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
         transport.set_auto_pick_off()
 
         self.assertEqual(button.clicks, 1)
-        self.assertEqual(page.last_role, ("button", {"name": "TURN OFF AUTO-PICK", "exact": True}))
+        self.assertEqual(page.last_text, ("TURN OFF AUTO-PICK", {"exact": True}))
 
 
 if __name__ == "__main__":

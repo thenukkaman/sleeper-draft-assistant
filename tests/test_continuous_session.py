@@ -111,7 +111,7 @@ class ContinuousDraftSessionTests(unittest.TestCase):
         self.assertEqual(report.cycles_completed, 2)
         self.assertEqual(pauses, [0.25])
 
-    def test_stops_after_an_unverified_player_action(self) -> None:
+    def test_continues_observing_after_an_unverified_player_action(self) -> None:
         observation = self._observation()
         unverified = SimpleNamespace(
             acted=True,
@@ -120,13 +120,25 @@ class ContinuousDraftSessionTests(unittest.TestCase):
             auto_pick_recovery=None,
             final_observation=observation,
         )
-        poller = _Poller([_Cycle(observation, self._snapshot(observation), unverified)])
+        complete = self._observation(
+            draft_status="completed",
+            current_pick_number=216,
+            our_pick_number=216,
+            pick_label="18.12",
+        )
+        poller = _Poller(
+            [
+                _Cycle(observation, self._snapshot(observation), unverified),
+                _Cycle(complete, self._snapshot(complete)),
+            ]
+        )
         pauses: list[float] = []
 
         report = self._session(poller, pauses).run(object())
 
-        self.assertEqual(report.termination, SessionTermination.UNVERIFIED_ACTION)
-        self.assertEqual(pauses, [])
+        self.assertEqual(report.termination, SessionTermination.DRAFT_COMPLETE)
+        self.assertEqual(report.cycles_completed, 2)
+        self.assertEqual(pauses, [0.25])
 
     def test_stops_after_failed_auto_pick_remediation(self) -> None:
         observation = self._observation(auto_pick_enabled=True)
@@ -145,7 +157,7 @@ class ContinuousDraftSessionTests(unittest.TestCase):
         self.assertEqual(report.termination, SessionTermination.AUTO_PICK_RECOVERY_FAILED)
         self.assertEqual(pauses, [])
 
-    def test_stops_when_a_live_clock_has_no_safe_action(self) -> None:
+    def test_continues_observing_when_a_live_clock_has_no_safe_action(self) -> None:
         observation = self._observation()
         blocked = SimpleNamespace(
             acted=False,
@@ -154,13 +166,25 @@ class ContinuousDraftSessionTests(unittest.TestCase):
             auto_pick_recovery=None,
             final_observation=observation,
         )
-        poller = _Poller([_Cycle(observation, self._snapshot(observation), blocked)])
+        complete = self._observation(
+            draft_status="completed",
+            current_pick_number=216,
+            our_pick_number=216,
+            pick_label="18.12",
+        )
+        poller = _Poller(
+            [
+                _Cycle(observation, self._snapshot(observation), blocked),
+                _Cycle(complete, self._snapshot(complete)),
+            ]
+        )
         pauses: list[float] = []
 
         report = self._session(poller, pauses).run(object())
 
-        self.assertEqual(report.termination, SessionTermination.ACTION_BLOCKED)
-        self.assertEqual(pauses, [])
+        self.assertEqual(report.termination, SessionTermination.DRAFT_COMPLETE)
+        self.assertEqual(report.cycles_completed, 2)
+        self.assertEqual(pauses, [0.25])
 
 
 if __name__ == "__main__":

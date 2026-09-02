@@ -21,7 +21,7 @@ from .adapters.sleeper_playwright import (
 )
 from .autonomy import AutonomousDraftGuard
 from .board import load_default_board
-from .continuous_session import ContinuousDraftSession, SessionTermination
+from .continuous_session import ContinuousDraftSession, PollingProfile, SessionTermination
 from .live_driver import ClockFirstDraftDriver
 from .persistent_runner import JsonlPickTelemetrySink, JsonlRunnerJournal, PersistentDraftRunner
 from .policies.sleeper_special_teams import SleeperRankedSpecialTeamsPolicy
@@ -43,6 +43,18 @@ def main() -> int:
     parser.add_argument("--runtime-dir", type=Path, default=Path("runtime"))
     parser.add_argument("--mode", choices=("live", "attached-draft"), required=True)
     parser.add_argument("--max-cycles", type=int, help="Controlled rehearsal only; omit for a full session.")
+    parser.add_argument(
+        "--drafting-poll-ms",
+        type=float,
+        default=250.0,
+        help="Poll interval while a draft clock is live (default: 250 ms).",
+    )
+    parser.add_argument(
+        "--waiting-poll-ms",
+        type=float,
+        default=1_000.0,
+        help="Poll interval before Sleeper opens a clock (default: 1000 ms; lower only for controlled mocks).",
+    )
     args = parser.parse_args()
 
     target = SleeperBrowserTarget(
@@ -79,6 +91,10 @@ def main() -> int:
             runner,
             expected_league_id=target.league_id,
             expected_username=target.username,
+            profile=PollingProfile(
+                drafting_interval_seconds=args.drafting_poll_ms / 1_000,
+                waiting_interval_seconds=args.waiting_poll_ms / 1_000,
+            ),
         ).run(room, max_cycles=args.max_cycles)
         _write_run_artifacts(run_directory, report, browser_session.transport.page.url)
     finally:

@@ -69,6 +69,9 @@ class DraftAttempt:
     reason: str
     auto_pick_recovery: AutoPickRecovery | None = None
     final_observation: BrowserObservation | None = None
+    # A transport error or an unverified submission permits continuous
+    # observation, but forbids another player click for this same clock.
+    quarantined: bool = False
 
 
 class ClockFirstDraftDriver:
@@ -272,7 +275,29 @@ class ClockFirstDraftDriver:
                 commit,
             )
         event("selection_requested")
-        room.draft(primary.player.name)
+        try:
+            room.draft(primary.player.name)
+        except Exception as error:
+            # The exact-row transport may have dispatched an event before it
+            # reports an error.  Re-observe once for evidence, then quarantine
+            # this clock: monitor and auto-pick recovery may continue, but a
+            # second player click would be unsafe.
+            try:
+                published = room.observe()
+                event("published_observation")
+            except Exception:
+                published = commit
+            return DraftAttempt(
+                True,
+                False,
+                primary.player.name,
+                recommendation,
+                commit_gate,
+                f"Exact Sleeper DRAFT control raised {type(error).__name__}; monitor this clock but do not retry the player action.",
+                recovery,
+                published,
+                True,
+            )
         published = room.observe()
         event("published_observation")
         recorded = {normalize_name(name) for name in published.drafted_players}
@@ -287,6 +312,7 @@ class ClockFirstDraftDriver:
                 "Draft click was submitted but Sleeper did not publish the named player; do not retry automatically.",
                 recovery,
                 published,
+                True,
             )
         if published.current_pick_number == commit.current_pick_number:
             return DraftAttempt(
@@ -298,6 +324,7 @@ class ClockFirstDraftDriver:
                 "Sleeper recorded the player but the draft clock did not advance; do not retry automatically.",
                 recovery,
                 published,
+                True,
             )
         return DraftAttempt(
             True,

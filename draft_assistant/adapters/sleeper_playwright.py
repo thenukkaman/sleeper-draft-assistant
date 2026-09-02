@@ -214,7 +214,7 @@ class SleeperPlaywrightTransport:
             if search.count() != 1:
                 raise SleeperPlaywrightTransportError("Sleeper player search control was not uniquely visible.")
             search.fill(player_name)
-            row = self._named_row(player_name)
+            row = self._wait_for_named_row(player_name)
             row.wait_for(state="visible", timeout=2_000)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
@@ -234,7 +234,21 @@ class SleeperPlaywrightTransport:
                 raise SleeperPlaywrightTransportError(
                     f"Sleeper did not expose exactly one visible DRAFT button for {player_name!r}."
                 )
-            button.click()
+            try:
+                # Sleeper renders this as a 24px <div>, not a native button.
+                # A normal Playwright click can spend its 30-second default
+                # timeout retrying the pointer-target check while the table
+                # animates.  Bound that latency first.
+                button.click(timeout=750)
+            except Exception as click_error:
+                if type(click_error).__name__ != "TimeoutError" or not button.is_visible():
+                    raise
+                # The exact row, normalized name, and semantic draft control
+                # were all revalidated immediately above.  For this one
+                # non-native Sleeper control, force dispatch is safer than
+                # silently burning the remaining clock.  The driver still
+                # verifies publication and never retries an uncertain pick.
+                button.click(timeout=750, force=True)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
                 raise
@@ -246,10 +260,15 @@ class SleeperPlaywrightTransport:
         """Issue the one permitted auto-pick action: visible TURN OFF control."""
 
         try:
-            button = self.page.get_by_role("button", name=_AUTO_PICK_OFF, exact=True)
-            if button.count() != 1 or not button.is_visible():
+            control = self.page.get_by_text(_AUTO_PICK_OFF, exact=True)
+            if control.count() != 1 or not control.is_visible():
                 raise SleeperPlaywrightTransportError("Visible TURN OFF AUTO-PICK control was not unique.")
-            button.click()
+            try:
+                control.click(timeout=750)
+            except Exception as click_error:
+                if type(click_error).__name__ != "TimeoutError" or not control.is_visible():
+                    raise
+                control.click(timeout=750, force=True)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
                 raise
@@ -274,6 +293,26 @@ class SleeperPlaywrightTransport:
                 f"Expected exactly one currently rendered Sleeper row for {player_name!r}; found {len(matching)}."
             )
         return matching[0]
+
+    def _wait_for_named_row(self, player_name: str) -> Any:
+        """Allow the virtualized Sleeper table a bounded time to apply search.
+
+        The search input can update before React has rendered the matching
+        row.  This is intentionally a sub-second wait, not a generic retry of
+        a draft action: it only proves that the already named row exists.
+        """
+
+        last_error: SleeperPlaywrightTransportError | None = None
+        for attempt in range(8):
+            try:
+                return self._named_row(player_name)
+            except SleeperPlaywrightTransportError as error:
+                last_error = error
+                if attempt == 7:
+                    break
+                self.page.wait_for_timeout(50)
+        assert last_error is not None
+        raise last_error
 
     def _blocked_observation(self, kind: BrowserBlockerKind, summary: str) -> BrowserObservation:
         return BrowserObservation(
