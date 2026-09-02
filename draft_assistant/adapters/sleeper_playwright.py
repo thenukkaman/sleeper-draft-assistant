@@ -268,9 +268,9 @@ class SleeperPlaywrightTransport:
         try:
             row = self._named_row(player_name)
             button = row.locator(_DRAFT_BUTTON)
-            if button.count() != 1 or not button.is_visible():
+            if button.count() != 1:
                 raise SleeperPlaywrightTransportError(
-                    f"Sleeper did not expose exactly one visible DRAFT button for {player_name!r}."
+                    f"Sleeper did not expose exactly one DRAFT button for {player_name!r}."
                 )
             wait_for = getattr(button, "wait_for", None)
             if callable(wait_for):
@@ -278,6 +278,10 @@ class SleeperPlaywrightTransport:
                 # commits. Wait only for this exact control, not for a generic
                 # page-idle condition, so the clock remains bounded.
                 wait_for(state="visible", timeout=500)
+            if not button.is_visible():
+                raise SleeperPlaywrightTransportError(
+                    f"Sleeper's exact DRAFT button was not visible for {player_name!r}."
+                )
             # Sleeper renders this as a 24px <div>, not a native button. The
             # exact normalized row and visible semantic control were just
             # revalidated, so dispatch directly rather than spending the pick
