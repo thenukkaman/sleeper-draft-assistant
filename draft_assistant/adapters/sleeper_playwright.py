@@ -213,9 +213,9 @@ class SleeperPlaywrightTransport:
             search = self.page.locator(_SEARCH_INPUT)
             if search.count() != 1:
                 raise SleeperPlaywrightTransportError("Sleeper player search control was not uniquely visible.")
-            search.fill(player_name)
+            search.fill(player_name, timeout=500)
             row = self._wait_for_named_row(player_name)
-            row.wait_for(state="visible", timeout=2_000)
+            row.wait_for(state="visible", timeout=500)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
                 raise
@@ -234,21 +234,12 @@ class SleeperPlaywrightTransport:
                 raise SleeperPlaywrightTransportError(
                     f"Sleeper did not expose exactly one visible DRAFT button for {player_name!r}."
                 )
-            try:
-                # Sleeper renders this as a 24px <div>, not a native button.
-                # A normal Playwright click can spend its 30-second default
-                # timeout retrying the pointer-target check while the table
-                # animates.  Bound that latency first.
-                button.click(timeout=750)
-            except Exception as click_error:
-                if type(click_error).__name__ != "TimeoutError" or not button.is_visible():
-                    raise
-                # The exact row, normalized name, and semantic draft control
-                # were all revalidated immediately above.  For this one
-                # non-native Sleeper control, force dispatch is safer than
-                # silently burning the remaining clock.  The driver still
-                # verifies publication and never retries an uncertain pick.
-                button.click(timeout=750, force=True)
+            # Sleeper renders this as a 24px <div>, not a native button. The
+            # exact normalized row and visible semantic control were just
+            # revalidated, so dispatch directly rather than spending the pick
+            # clock on Playwright's pointer-target retry loop. Publication
+            # verification and no-retry quarantine still apply.
+            button.click(timeout=750, force=True)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
                 raise
@@ -263,12 +254,7 @@ class SleeperPlaywrightTransport:
             control = self.page.get_by_text(_AUTO_PICK_OFF, exact=True)
             if control.count() != 1 or not control.is_visible():
                 raise SleeperPlaywrightTransportError("Visible TURN OFF AUTO-PICK control was not unique.")
-            try:
-                control.click(timeout=750)
-            except Exception as click_error:
-                if type(click_error).__name__ != "TimeoutError" or not control.is_visible():
-                    raise
-                control.click(timeout=750, force=True)
+            control.click(timeout=750, force=True)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
                 raise
@@ -284,7 +270,7 @@ class SleeperPlaywrightTransport:
         matching: list[Any] = []
         for index in range(rows.count()):
             row = rows.nth(index)
-            text = row.inner_text()
+            text = row.inner_text(timeout=150)
             resolved = _resolve_board_player(text, self.board)
             if resolved is not None and normalize_name(resolved) == expected:
                 matching.append(row)
@@ -543,11 +529,37 @@ def _resolve_board_player(text: str, board: Board) -> str | None:
         if normalized_player and normalized_player in normalized_text:
             exact.append(player.name)
             continue
-        name_parts = re.findall(r"[a-z0-9]+", player.name.casefold())
-        if len(name_parts) >= 2 and normalize_name(f"{name_parts[0][0]} {name_parts[-1]}") in normalized_text:
+        if _sleeper_abbreviation(player.name) in normalized_text:
             abbreviated.append(player.name)
     candidates = exact or abbreviated
+    if len(candidates) > 1 and (position := _POSITION.search(text)) is not None:
+        candidates = [
+            name
+            for name in candidates
+            if board.by_normalized_name[normalize_name(name)].position == position["position"].upper()
+        ]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _sleeper_abbreviation(player_name: str) -> str:
+    """Return Sleeper's compact first-initial/family-name form.
+
+    Multi-word family names retain their family particle (``St. Brown``), while
+    suffixes such as ``Jr.`` are ignored. This prevents `A. Brown` from being
+    confused with `A. St. Brown` when reconciling drafted cells.
+    """
+
+    parts = re.findall(r"[a-z0-9]+", player_name.casefold())
+    if len(parts) < 2:
+        return ""
+    suffixes = {"jr", "sr", "ii", "iii", "iv"}
+    family_end = len(parts) - 1
+    while family_end > 0 and parts[family_end] in suffixes:
+        family_end -= 1
+    family_start = family_end
+    if family_start > 0 and parts[family_start - 1] in {"st", "van", "von", "de", "del", "la", "le"}:
+        family_start -= 1
+    return normalize_name(f"{parts[0][0]} {' '.join(parts[family_start:family_end + 1])}")
 
 
 def _our_pick_numbers(target: SleeperBrowserTarget, rounds: int) -> frozenset[int]:

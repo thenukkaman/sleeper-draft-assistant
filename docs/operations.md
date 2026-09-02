@@ -29,6 +29,21 @@ append-only journal receives every poll and action event. If the host loses
 foreground control, browser access, network, or process continuity, the
 runner must fail closed and the draft is a no-go for unattended execution.
 
+## Worker arming failure
+
+`worker_failed_to_arm` is a pre-start blocker, not a draft-time incident. Do
+not activate a mock `START DRAFT` or a live `DRAFTROOM` clock until all three
+conditions hold: the worker process remains alive for one second after launch,
+a new timestamped `runtime/` directory exists, and its `polls.jsonl` contains
+an expected-league/account observation in `waiting` or `drafting` state.
+
+If the process exits before creating a runtime directory, preserve its launch
+error and correct the host invocation rather than retrying the draft. In
+particular, Windows shell argument joining can split a spaced league name such
+as `North Redmond 40`; launch through an argument-list API (for example
+`ProcessStartInfo.ArgumentList`) or run the canonical Python command in the
+foreground. This failure never authorizes starting the draft without a worker.
+
 Use `ContinuousDraftSession` as the process-level loop for that rehearsal; it
 is not a replacement for the host browser transport. Its default 250-ms
 active-draft cadence is a starting measurement profile, not an assumed

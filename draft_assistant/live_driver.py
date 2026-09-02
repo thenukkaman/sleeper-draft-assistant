@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import sleep
 from typing import Callable, Protocol
 
 from .autonomy import AutonomousDraftGuard, ExecutionGate
@@ -83,11 +84,13 @@ class ClockFirstDraftDriver:
         policy: DraftPolicy,
         guard: AutonomousDraftGuard,
         now: Callable[[], datetime] = _utc_now,
+        pause: Callable[[float], None] = sleep,
     ) -> None:
         self.board = board
         self.policy = policy
         self.guard = guard
         self.now = now
+        self.pause = pause
 
     def run_once(
         self,
@@ -301,6 +304,19 @@ class ClockFirstDraftDriver:
         published = room.observe()
         event("published_observation")
         recorded = {normalize_name(name) for name in published.drafted_players}
+        # Sleeper accepts the exact action before its drafted-cell DOM updates.
+        # Give that publish event a bounded 600-ms confirmation window. This is
+        # observation only: no fallback player and no second click is allowed.
+        for _ in range(6):
+            if (
+                normalize_name(primary.player.name) in recorded
+                and published.current_pick_number != commit.current_pick_number
+            ):
+                break
+            self.pause(0.1)
+            published = room.observe()
+            event("published_observation")
+            recorded = {normalize_name(name) for name in published.drafted_players}
         if normalize_name(primary.player.name) not in recorded:
             # An ambiguous click must never trigger an automatic second click.
             return DraftAttempt(

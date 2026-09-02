@@ -6,6 +6,7 @@ from draft_assistant.adapters.sleeper_playwright import (
     SleeperBrowserTarget,
     SleeperPlaywrightTransport,
     SleeperPlaywrightTransportError,
+    _resolve_board_player,
     observation_from_dom_snapshot,
 )
 from draft_assistant.board import load_default_board
@@ -34,7 +35,7 @@ class _Locator:
     def nth(self, index: int) -> object:
         return self.items[index]
 
-    def fill(self, value: str) -> None:
+    def fill(self, value: str, **kwargs) -> None:
         self.filled.append(value)
 
     def is_visible(self) -> bool:
@@ -50,7 +51,7 @@ class _Row:
         self.button = button
         self.waits = 0
 
-    def inner_text(self) -> str:
+    def inner_text(self, **kwargs) -> str:
         return self.text
 
     def locator(self, selector: str) -> _Locator:
@@ -165,6 +166,13 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
 
         self.assertIsNotNone(observation.blocker)
         self.assertIn("Cookie-consent", observation.blocker.summary)
+
+    def test_resolves_sleeper_abbreviations_without_brown_name_collision(self) -> None:
+        self.assertEqual(_resolve_board_player("2.08\nA. Brown\nWR - NE", self.board), "AJ Brown")
+        self.assertEqual(
+            _resolve_board_player("2.03\nA. St. Brown\nWR - DET", self.board),
+            "Amon-Ra St. Brown",
+        )
 
     def test_refuses_a_draft_room_without_one_active_countdown_cell(self) -> None:
         raw = self._raw(draftCells=[])
