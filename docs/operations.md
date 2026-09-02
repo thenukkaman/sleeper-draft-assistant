@@ -29,6 +29,11 @@ append-only journal receives every poll and action event. If the host loses
 foreground control, browser access, network, or process continuity, the
 runner must fail closed and the draft is a no-go for unattended execution.
 
+Use `ContinuousDraftSession` as the process-level loop for that rehearsal; it
+is not a replacement for the host browser transport. Its default 250-ms
+active-draft cadence is a starting measurement profile, not an assumed
+performance result. Capture the actual observation cost before changing it.
+
 ## Required live-runner contract
 
 Before a live browser executor is considered for an unattended draft, it must:

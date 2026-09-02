@@ -17,6 +17,7 @@ draft_assistant/          Installable Python package
   interfaces/             Neutral browser/news/draftboard contracts
   adapters/               External-service translation (read-only today)
   persistent_runner.py    Clock-edge orchestration and timing evidence
+  continuous_session.py   One uninterrupted host-process loop and stop policy
 tests/                    Fast deterministic unit tests
 fixtures/                 Reproducible local draft states
 draft_assistant/stress.py Structured test telemetry and post-mortem metrics
@@ -59,6 +60,14 @@ cli.py                     Thin presentation layer for local JSON state or Sleep
 ```
 
 The policy has no network or browser imports. A future policy can replace `SourceBoardPolicy` without changing the data adapter or the interface. The browser side supplies only a `BrowserObservation`; it cannot change how players are ranked. `PersistentDraftRunner` is likewise browser-neutral: a concrete browser process schedules its `poll_once` method, while the runner preserves the prepared candidate ladder and returns durable timing evidence rather than sleeping, taking screenshots, or issuing selectors itself.
+
+`ContinuousDraftSession` is the process-level companion for a future concrete
+browser transport. It holds one local worker open across the full draft,
+checks the visible league/account on every cycle, and uses a configurable
+250-ms active-draft cadence by default. It continues after a recorded lost
+clock only when auto-pick recovery succeeded and the clock has advanced; it
+fails closed on an unverified click, browser blocker, account mismatch, or
+failed recovery.
 
 ## Local test
 

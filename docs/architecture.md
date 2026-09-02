@@ -14,6 +14,8 @@ board.json -> board.py -> policies/ -> Recommendation
 Browser/API adapter -> BrowserObservation -> PersistentDraftRunner -> ClockFirstDraftDriver
                                      |                    |                       |
                                      +----------------> DraftState <---------- autonomy.py
+                                                           |
+                                                           +-> ContinuousDraftSession
 ```
 
 The arrows are intentional:
@@ -31,6 +33,9 @@ The arrows are intentional:
 - `persistent_runner.py` retains only the latest completed poll and prepared
   candidate ladder. It accepts browser observations and emits timing evidence;
   it does not implement selectors, credentials, sleeps, or a scheduler.
+- `continuous_session.py` is the host-process loop. It supplies polling cadence
+  and fail-closed session termination without acquiring browser state or
+  changing a draft recommendation.
 
 ## Execution boundary
 
@@ -69,6 +74,18 @@ The live preflight is intentionally different: the approved league pre-draft
 page exposes `DRAFTROOM`. The runner may use that control only to enter the
 scheduled league room, then waits for Sleeper's active-draft state. It has no
 authority to start the league draft through a mock control.
+
+## Continuous-session boundary
+
+`ContinuousDraftSession` runs the browser-neutral runner as one local process
+for the whole mock or live room. The default active-draft cadence is 250 ms;
+the host may change it only through its `PollingProfile`, never by changing the
+draft policy. It validates the visible expected league ID and account on each
+cycle and terminates on a browser blocker, account mismatch, unverified click,
+or failed auto-pick disable. A detected lost pick whose recovery did succeed
+does not terminate the session: it is journaled and the next pick is prepared
+immediately, so the agent does not compound the failure by abandoning the
+remainder of the draft.
 
 ## Lookahead boundary
 
