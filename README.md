@@ -32,7 +32,9 @@ python -m draft_assistant.cli recommend --state fixtures\opening_state.json
 ```
 
 See [architecture](docs/architecture.md) for the component model and
-[operations](docs/operations.md) for the live-execution boundary.
+[operations](docs/operations.md) for the live-execution boundary. The
+host-browser integration is constrained by the
+[Sleeper transport contract](docs/sleeper-browser-transport.md).
 
 ## Stress-test evidence
 

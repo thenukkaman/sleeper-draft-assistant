@@ -86,5 +86,7 @@ def _resolve_source_player(board: Board, displayed_name: str, position: str) -> 
 def _overall_pick(label: str, teams: int) -> int:
     round_text, slot_text = label.split(".")
     round_number, slot = int(round_text), int(slot_text)
-    within_round = slot if round_number % 2 else teams + 1 - slot
-    return (round_number - 1) * teams + within_round
+    # Sleeper's visible ``round.pick`` label stays chronological within the
+    # round even though its board columns reverse in snake rounds.  Thus 2.08
+    # is absolute pick 20 (not 17) for a 12-team room.
+    return (round_number - 1) * teams + slot

@@ -572,6 +572,20 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertEqual(parsed.current_pick_label, "3.5")
         self.assertEqual(parsed.current_pick_number, 29)
 
+    def test_visible_draftboard_uses_sleeper_chronological_even_round_labels(self) -> None:
+        snapshot = '''
+- heading "kenikh" [level=1]
+- generic: "2.8"
+- generic: 01:14
+'''
+
+        parsed = parse_visible_draftboard(snapshot, self.board, "kenikh")
+
+        # Sleeper renders the snake board under team columns, but 2.08 is the
+        # eighth chronological selection in Round 2: overall pick 20.
+        self.assertEqual(parsed.current_pick_label, "2.8")
+        self.assertEqual(parsed.current_pick_number, 20)
+
 
 if __name__ == "__main__":
     unittest.main()
