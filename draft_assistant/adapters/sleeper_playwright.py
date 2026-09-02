@@ -309,11 +309,23 @@ class SleeperPlaywrightTransport:
 
         self.reveal_player_row(player_name)
         try:
-            row = self._named_row(player_name)
-            button = row.locator(_DRAFT_BUTTON)
-            if button.count() != 1 or not button.is_visible():
+            # React can publish the matching row a few milliseconds before it
+            # enables the plus/DRAFT control.  Wait only for that control to
+            # become actionable; this is not a retry of a submitted pick.
+            button = None
+            for attempt in range(4):
+                row = self._named_row(player_name)
+                candidate = row.locator(_DRAFT_BUTTON)
+                if candidate.count() == 1 and candidate.is_visible():
+                    classes = str(candidate.get_attribute("class") or "")
+                    if "disable" not in classes.split():
+                        button = candidate
+                        break
+                if attempt < 3:
+                    self.page.wait_for_timeout(50)
+            if button is None:
                 raise SleeperPlaywrightTransportError(
-                    f"Sleeper did not expose exactly one visible DRAFT button for {player_name!r}."
+                    f"Sleeper did not expose one enabled visible DRAFT button for {player_name!r}."
                 )
             # Sleeper renders this as a 24px <div>, not a native button. The
             # exact normalized row and visible semantic control were just
