@@ -337,7 +337,10 @@ class SleeperPlaywrightTransport:
         """
 
         last_error: SleeperPlaywrightTransportError | None = None
-        for attempt in range(8):
+        # Sleeper's filter can take longer for a player outside the currently
+        # virtualized rank window. This is still preparation only; no draft
+        # action is retried while waiting for the named row.
+        for attempt in range(20):
             try:
                 return self._named_row(player_name)
             except SleeperPlaywrightTransportError as error:
