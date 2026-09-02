@@ -47,3 +47,21 @@ because a public API response cannot confirm the browser-only safeguards.
 Do not commit credentials, cookies, browser profiles, or draft transcripts
 that identify accounts. Put any future local runtime state under `runtime/`,
 which is ignored by Git.
+
+## Stress-test acceptance criteria
+
+Run 25 complete mocks before approving unattended execution. Capture a JSON
+record for every one of the team's 18 picks, then calculate the report from
+those records. The run is a pass only if:
+
+- all 25 mocks complete;
+- no team pick is missed;
+- every submitted pick is confirmed as the expected player (or explicitly
+  classified as a policy mismatch);
+- no auto-pick state appears without a recorded detection and remediation;
+- the measured selection and confirmation latencies are comfortably below the
+  two-minute clock, including the slowest observed pick.
+
+The post-mortem must list every exception with its raw reason, not merely an
+aggregate count. A later approval threshold can be made stricter once enough
+latency data exists.

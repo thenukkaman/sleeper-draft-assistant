@@ -18,6 +18,7 @@ draft_assistant/          Installable Python package
   adapters/               External-service translation (read-only today)
 tests/                    Fast deterministic unit tests
 fixtures/                 Reproducible local draft states
+draft_assistant/stress.py Structured test telemetry and post-mortem metrics
 docs/architecture.md      Component boundaries and dependency direction
 docs/operations.md        Safety rules and live-runner acceptance criteria
 ```
@@ -31,6 +32,14 @@ python -m draft_assistant.cli recommend --state fixtures\opening_state.json
 
 See [architecture](docs/architecture.md) for the component model and
 [operations](docs/operations.md) for the live-execution boundary.
+
+## Stress-test evidence
+
+Each mock must record the observation-to-selection and observation-to-
+confirmation latencies for every one of our picks, its policy expectation,
+actual player, and the before/after auto-pick state. `draft_assistant.stress`
+serializes one mock per JSON file and summarizes all completed mocks without
+inventing missing evidence.
 
 ## Architecture
 
