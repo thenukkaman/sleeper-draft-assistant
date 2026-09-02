@@ -29,6 +29,7 @@ class BrowserBlockerKind(StrEnum):
     """
 
     MOCK_DRAFT_READY = "mock_draft_ready"
+    LIVE_DRAFTROOM_READY = "live_draftroom_ready"
     UNEXPECTED_DIALOG = "unexpected_dialog"
     PENDING_REQUEST = "pending_request"
     UNRESPONSIVE = "unresponsive"

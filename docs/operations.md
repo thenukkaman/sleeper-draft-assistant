@@ -41,8 +41,8 @@ Every browser observation must include either a clear page or a structured
 `BrowserBlocker`. The executor must fail closed—without clicking a player,
 retrying a previous click, or changing auto-pick—on any of the following:
 
-- the known mock-only preflight surface (record the exact `START DRAFT`
-  control and its surrounding state);
+- a known preflight surface (record the exact control and its surrounding
+  state): mock-only `START DRAFT`, or live-league `DRAFTROOM`;
 - an unexpected visible dialog or overlay;
 - a request that remains a spinner beyond the executor's bounded read/action
   deadline; or
@@ -55,6 +55,13 @@ activate that exact control in a mock run; it must never use this path for the
 scheduled live league draft. Unknown dialogs are never auto-accepted. After
 the mock starts, the executor must read a fresh, clear browser state before
 entering the clock-first pick flow.
+
+The scheduled live-draft preflight is separately constrained: on the approved
+league's pre-draft page, click the visible `DRAFTROOM` control to enter the
+room. That is navigation, not permission to start a draft. The runner then
+waits for Sleeper to report `drafting`, confirms the league/account and
+auto-pick state, and only then permits the normal per-pick transaction. It
+must never use mock `START DRAFT` in the live league.
 
 This distinction matters in the observed Sleeper mock-creation failure: the
 `NEW MOCK DRAFT` control became a spinner and the page stayed on the lobby;

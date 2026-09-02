@@ -52,6 +52,11 @@ adapter may navigate from the league pre-draft page through `MOCK DRAFTS` and
 produce a fresh browser observation after that transition; the live runner
 never treats a preflight control as a player selection.
 
+The live preflight is intentionally different: the approved league pre-draft
+page exposes `DRAFTROOM`. The runner may use that control only to enter the
+scheduled league room, then waits for Sleeper's active-draft state. It has no
+authority to start the league draft through a mock control.
+
 ## Annual refresh
 
 For a new season, start by replacing `draft_assistant/board.json`. Update
