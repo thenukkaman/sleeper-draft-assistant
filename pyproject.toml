@@ -28,8 +28,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["draft_assistant", "draft_assistant.adapters", "draft_assistant.interfaces", "draft_assistant.policies"]
 
-[tool.setuptools.package-data]
-draft_assistant = ["board.json"]
 
 [tool.unittest]
 start-directory = "tests"

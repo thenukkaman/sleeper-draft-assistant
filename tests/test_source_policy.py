@@ -18,6 +18,7 @@ from draft_assistant.lookahead import LookaheadPlanner, pick_label_for_number
 from draft_assistant.models import DraftState, NewsDecision, NewsReview
 from draft_assistant.policies.sleeper_special_teams import SleeperRankedSpecialTeamsPolicy
 from draft_assistant.policies.source_board import SourceBoardPolicy
+from draft_assistant.policies.value_model import ValueModel
 
 
 class SourceBoardPolicyTests(unittest.TestCase):
@@ -124,8 +125,46 @@ class SourceBoardPolicyTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(result.primary.player.name, "Carnell Tate")
-        self.assertIn("RSP overlay", result.primary.reason)
+        self.assertEqual(result.primary.player.name, "Rome Odunze")
+        self.assertIn("Harmon WR overlay", result.primary.reason)
+
+    def test_harmon_rookie_coverage_and_waldman_overlap_creates_a_strong_target(self) -> None:
+        result = self.policy.recommend(
+            self.board,
+            DraftState(
+                round_number=8,
+                pick_label="8.08",
+                roster_positions=("QB", "QB", "QB", "RB", "RB", "WR", "WR", "TE"),
+                available_players=frozenset({"KC Concepcion", "Carnell Tate", "Makai Lemon"}),
+            ),
+        )
+        self.assertEqual(result.primary.player.name, "KC Concepcion")
+        self.assertIn("Harmon rookie coverage composite", result.primary.reason)
+        self.assertIn("TRIPLE-WINNER TARGET", result.primary.reason)
+
+    def test_avoid_clearance_is_explicit_and_round_sensitive(self) -> None:
+        player = self.board.by_normalized_name["jonathantaylor"]
+        value = ValueModel()
+        early = value.tag_price(player, DraftState(round_number=2, pick_label="2.08", current_pick_number=20, market_adp={"Jonathan Taylor": 8}))
+        middle = value.tag_price(player, DraftState(round_number=5, pick_label="5.05", current_pick_number=53, market_adp={"Jonathan Taylor": 43}))
+        self.assertTrue(early.clearance_met)
+        self.assertTrue(middle.clearance_met)
+        self.assertIn("12-pick", early.summary)
+        self.assertIn("10-pick", middle.summary)
+
+    def test_defense_run_only_pivots_a_round_early_at_a_real_tier_cliff(self) -> None:
+        specialist = SleeperRankedSpecialTeamsPolicy(self.policy)
+        state = DraftState(
+            round_number=16,
+            pick_label="16.08",
+            roster_positions=("QB", "QB", "QB", "RB", "RB", "WR", "WR", "TE"),
+            recent_pick_positions=("WR", "DEF", "DEF", "RB", "DEF", "TE"),
+            sleeper_ranked_specialists={"DEF": ("A", "B", "C", "D", "E")},
+            sleeper_specialist_points={"DEF": {"A": 110, "B": 108, "C": 107, "D": 106, "E": 104}},
+        )
+        result = specialist.recommend(self.board, state)
+        self.assertEqual(result.primary.player.position, "DEF")
+        self.assertEqual(result.primary.player.name, "A")
 
     def test_special_teams_waits_until_round_17_then_uses_sleeper_rank(self) -> None:
         specialist_policy = SleeperRankedSpecialTeamsPolicy(self.policy)

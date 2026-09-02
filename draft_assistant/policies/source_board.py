@@ -6,12 +6,27 @@ from collections import Counter
 
 from ..board import Board, normalize_name
 from ..models import Candidate, DraftState, Player, Recommendation, Tag
+from .value_model import ValueModel
+from .consensus import AnalystRanks, ConsensusModel
+from ..research import WaldmanRedraftRecord
 
 
 class SourceBoardPolicy:
     """Strictly applies the player board and stated Superflex constraints."""
 
     name = "source-board-2026-superflex-v1"
+
+    def __init__(
+        self,
+        value_model: ValueModel | None = None,
+        waldman_redraft: dict[str, WaldmanRedraftRecord] | None = None,
+        consensus_model: ConsensusModel | None = None,
+    ) -> None:
+        # Independent module: next year's market/risk policy can be swapped
+        # without rewriting the board, roster constraints, or browser adapter.
+        self.value_model = value_model or ValueModel()
+        self.waldman_redraft = waldman_redraft or {}
+        self.consensus_model = consensus_model or ConsensusModel()
 
     def recommend(self, board: Board, state: DraftState, limit: int = 3) -> Recommendation:
         if state.draft_status != "drafting":
@@ -54,6 +69,30 @@ class SourceBoardPolicy:
             return self._result(
                 self._as_candidates(qbs, "Two-QB Superflex core is still incomplete."),
                 "Repair the incomplete Superflex QB core before other positions.",
+                warnings,
+                limit,
+            )
+
+        # Two RB starters are mandatory.  This is deliberately a hard roster
+        # constraint, not a soft score bonus: after QB2, RB1 must be secured by
+        # the Round-3 pick and RB2 by the Round-4 pick.  In particular, QB3,
+        # TEP, tags, and late-round UPSIDE preference may not postpone RB2.
+        rbs = sorted((player for player in available if player.position == "RB"), key=lambda player: player.rank)
+        rb_required = (counts["RB"] == 0 and state.round_number >= 3) or (
+            counts["RB"] < 2 and state.round_number >= 4
+        )
+        if rb_required and rbs:
+            required_slot = "RB1" if counts["RB"] == 0 else "RB2"
+            # A required position does not erase the user's AVOID price rule.
+            # Take the best ordinary/target/upside RB first; use an AVOID RB
+            # only when no other RB remains.
+            non_avoid_rbs = [player for player in rbs if player.tag != Tag.AVOID]
+            return self._result(
+                self._as_candidates(
+                    non_avoid_rbs + [player for player in rbs if player.tag == Tag.AVOID] or rbs,
+                    f"{required_slot} is a mandatory starting-roster requirement.",
+                ),
+                f"Draft {required_slot} now: this league requires two starting RBs before QB3 or optional upside.",
                 warnings,
                 limit,
             )
@@ -144,15 +183,42 @@ class SourceBoardPolicy:
                 continue
             score = 500.0 - player.rank * 3.0
             target = state.round_number >= 4
-            if player.tag == Tag.TARGET:
-                score += 18.0
-            elif player.tag == Tag.UPSIDE and target:
-                score += 14.0
-            elif player.tag == Tag.AVOID:
-                # AVOID means "only at a falling price", never an absolute ban.
-                # The discount remains material, but it shrinks after the core is built.
-                score -= max(30.0, 135.0 - max(0, state.round_number - 4) * 15.0)
-            if state.round_number >= 4 and (rsp := board.rsp_adjustment(player.name)):
+            tag_price = self.value_model.tag_price(player, state)
+            score += tag_price.adjustment
+            if player.tag == Tag.UPSIDE and target:
+                score += self.value_model.upside_bonus
+            vbd = self.value_model.vbd(player, available, state)
+            if vbd is not None:
+                # VBD is intentionally a tie-breaker scale, not a wholesale
+                # rewrite of the user-ranked board. A 4-point tier cliff can
+                # legitimately overcome a close source-rank difference.
+                score += vbd
+            rsp = board.rsp_adjustment(player.name)
+            harmon = board.harmon_wr_adjustment(player.name)
+            rookie_harmon = board.harmon_rookie_wr_adjustment(player.name)
+            harmon_adjustment = self.value_model.harmon_wr_adjustment(player, harmon)
+            score += harmon_adjustment
+            rookie_adjustment = self.value_model.harmon_rookie_adjustment(rookie_harmon)
+            score += rookie_adjustment
+            conviction = self.value_model.is_waldman_harmon_conviction(player, rsp, harmon, rookie_harmon)
+            triple_conviction = self.value_model.is_triple_conviction(player, rsp, harmon, rookie_harmon)
+            consensus = self._consensus(board, player, harmon)
+            if consensus is not None:
+                # The baseline source rank already determines most of the
+                # score. Consensus moves close calls, and only tight genuine
+                # agreement earns its separate label bonus.
+                score += (consensus.score - 0.5) * 30.0
+                if consensus.label == "GOLD":
+                    score += 38.0
+                elif consensus.label == "STRONG":
+                    score += 20.0
+            if state.round_number >= 4:
+                score += (
+                    self.value_model.waldman_jj_harmon_conviction_bonus
+                    if triple_conviction
+                    else self.value_model.waldman_harmon_conviction_bonus if conviction else 0.0
+                )
+            if state.round_number >= 4 and rsp:
                 score += float(rsp["points"])
             score += max(0, 2 - counts[player.position]) * 8.0
             score += max(0, 1 - counts[player.position]) * 8.0
@@ -163,6 +229,32 @@ class SourceBoardPolicy:
             if player.position == "TE" and counts["TE"] < 1 and state.round_number <= 8:
                 score += 10.0
             reason = self._flex_reason(player, state, counts)
+            if player.tag in {Tag.TARGET, Tag.AVOID}:
+                reason += " " + tag_price.summary
+            if vbd is not None:
+                reason += f" VBD: +{vbd:.1f} projected points over {player.position} replacement."
+            if harmon is not None:
+                direction = "above" if harmon_adjustment >= 0 else "below"
+                reason += (
+                    f" Harmon WR overlay: WR{harmon['rank']}, Tier {harmon['tier']} "
+                    f"({abs(harmon_adjustment) / self.value_model.harmon_wr_rank_weight:.0f} board slots {direction} source rank)."
+                )
+            if rookie_harmon is not None:
+                reason += (
+                    f" Harmon rookie coverage composite: {rookie_harmon['composite']:.1f} "
+                    f"over {rookie_harmon['routes']} routes."
+                )
+            if triple_conviction and state.round_number >= 4:
+                reason += " Waldman + JJ + Harmon conviction: TRIPLE-WINNER TARGET."
+            elif conviction and state.round_number >= 4:
+                reason += " Waldman + Harmon conviction: STRONG TARGET."
+            if consensus is not None:
+                reason += f" Consensus {consensus.label}: {consensus.score:.2f} value / {consensus.alignment:.2f} dispersion."
+            if self.value_model.is_position_run(player.position, state):
+                reason += (
+                    " Position run detected; pivot only if the live VBD tier break exceeds "
+                    f"{self.value_model.pivot_vbd_gap:.1f} points."
+                )
             if state.round_number >= 4 and (rsp := board.rsp_adjustment(player.name)):
                 reason += f" RSP overlay: {rsp['note']}"
             candidates.append(
@@ -175,6 +267,22 @@ class SourceBoardPolicy:
             )
         return sorted(candidates, key=lambda candidate: (-candidate.score, candidate.player.rank, candidate.player.name))
 
+    def _consensus(self, board: Board, player: Player, harmon: dict[str, int] | None):
+        record = self.waldman_redraft.get(normalize_name(player.name))
+        if record is None:
+            return None
+        pool = sum(1 for candidate in board.players if candidate.position == player.position)
+        return self.consensus_model.score(
+            player.position,
+            AnalystRanks(
+                jj=player.rank,
+                waldman=record.position_rank,
+                harmon=int(harmon["rank"]) if harmon is not None else None,
+                position_pool=pool,
+                rookie=board.rsp_adjustment(player.name) is not None,
+            ),
+        )
+
     @staticmethod
     def _flex_reason(player: Player, state: DraftState, counts: Counter[str]) -> str:
         if player.name == "Brock Bowers" and state.round_number <= 3:
@@ -184,7 +292,7 @@ class SourceBoardPolicy:
         if player.tag == Tag.UPSIDE and state.round_number >= 4:
             return "Source UPSIDE is preferred over floor after Round 3."
         if player.tag == Tag.AVOID:
-            return "AVOID at a discount: it has fallen behind enough source-board alternatives."
+            return "AVOID: only draft after its explicit market-clearance requirement is met."
         if counts[player.position] < 2:
             return f"Build the starting {player.position} core before deeper bench value."
         return "Highest remaining eligible source-board value."

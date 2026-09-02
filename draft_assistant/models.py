@@ -55,6 +55,15 @@ class DraftState:
     drafted_players: frozenset[str] = frozenset()
     available_players: frozenset[str] | None = None
     sleeper_ranked_specialists: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Market ADP and projected points are observations from Sleeper's current
+    # player table, not source-board data.  Keeping them here lets a policy
+    # price a tag or calculate VBD without contaminating the user's rankings.
+    market_adp: dict[str, float] = field(default_factory=dict)
+    projected_points: dict[str, float] = field(default_factory=dict)
+    sleeper_specialist_points: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Ordered, most-recent-last positional selections.  A set of drafted
+    # players cannot tell us whether a position is currently running.
+    recent_pick_positions: tuple[str, ...] = ()
     news_reviews: dict[str, NewsReview] = field(default_factory=dict)
     observed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     league_id: str | None = None
@@ -90,6 +99,13 @@ class DraftState:
                 position.upper(): tuple(names)
                 for position, names in raw.get("sleeper_ranked_specialists", {}).items()
             },
+            market_adp={str(name): float(value) for name, value in raw.get("market_adp", {}).items()},
+            projected_points={str(name): float(value) for name, value in raw.get("projected_points", {}).items()},
+            sleeper_specialist_points={
+                str(position).upper(): {str(name): float(points) for name, points in values.items()}
+                for position, values in raw.get("sleeper_specialist_points", {}).items()
+            },
+            recent_pick_positions=tuple(str(position).upper() for position in raw.get("recent_pick_positions", ())),
             news_reviews=reviews,
             observed_at=observed_at,
             league_id=raw.get("league_id"),

@@ -307,32 +307,18 @@ class SleeperPlaywrightTransport:
     def click_exact_draft(self, player_name: str) -> None:
         """Click only one live row's semantic Sleeper DRAFT control."""
 
-        self.reveal_player_row(player_name)
         try:
-            # React can publish the matching row a few milliseconds before it
-            # enables the plus/DRAFT control.  Wait only for that control to
-            # become actionable; this is not a retry of a submitted pick.
-            button = None
-            for attempt in range(4):
-                row = self._named_row(player_name)
-                candidate = row.locator(_DRAFT_BUTTON)
-                if candidate.count() == 1 and candidate.is_visible():
-                    classes = str(candidate.get_attribute("class") or "")
-                    if "disable" not in classes.split():
-                        button = candidate
-                        break
-                if attempt < 3:
-                    self.page.wait_for_timeout(50)
-            if button is None:
-                raise SleeperPlaywrightTransportError(
-                    f"Sleeper did not expose one enabled visible DRAFT button for {player_name!r}."
-                )
-            # Sleeper renders this as a 24px <div>, not a native button. The
-            # exact normalized row and visible semantic control were just
-            # revalidated, so dispatch directly rather than spending the pick
-            # clock on Playwright's pointer-target retry loop. Publication
-            # verification and no-retry quarantine still apply.
-            button.click(timeout=750, force=True)
+            search = self.page.locator(_SEARCH_INPUT)
+            search.fill(player_name, timeout=500)
+            row = self._wait_for_named_row(player_name)
+            # This is a readiness assertion, not a polling loop. On an
+            # already rendered search result it completes immediately and
+            # ensures the semantic DRAFT control belongs to a visible row.
+            row.wait_for(state="visible", timeout=500)
+            # Sleeper's 24px plus control is a div.  Once the exact searched
+            # row exists, submit one forced click immediately; this is the
+            # latency-critical action and intentionally has no readiness loop.
+            row.locator(_DRAFT_BUTTON).click(timeout=750, force=True)
         except Exception as error:
             if isinstance(error, SleeperPlaywrightTransportError):
                 raise
@@ -445,6 +431,9 @@ def observation_from_dom_snapshot(
                 drafted_players=_drafted_source_players(cells, board),
                 roster_positions=_roster_positions(cells, board, target),
                 row_actions=_row_actions(rows, board),
+                recent_pick_positions=_recent_pick_positions(cells),
+                market_adp=_market_metrics(rows, board)[0],
+                projected_points=_market_metrics(rows, board)[1],
             )
         if cells:
             # A live room is allowed to exist before Sleeper opens the first
@@ -460,6 +449,9 @@ def observation_from_dom_snapshot(
                 drafted_players=_drafted_source_players(cells, board),
                 roster_positions=_roster_positions(cells, board, target),
                 row_actions=_row_actions(rows, board),
+                recent_pick_positions=_recent_pick_positions(cells),
+                market_adp=_market_metrics(rows, board)[0],
+                projected_points=_market_metrics(rows, board)[1],
             )
         return _blocked(target, BrowserBlockerKind.PENDING_REQUEST, "No active draft-cell countdown was exposed by Sleeper.")
 
@@ -474,6 +466,9 @@ def observation_from_dom_snapshot(
         drafted_players=drafted,
         roster_positions=roster,
         row_actions=_row_actions(rows, board),
+        recent_pick_positions=_recent_pick_positions(cells),
+        market_adp=_market_metrics(rows, board)[0],
+        projected_points=_market_metrics(rows, board)[1],
     )
 
 
@@ -487,6 +482,9 @@ def _observation(
     drafted_players: frozenset[str],
     roster_positions: tuple[str, ...],
     row_actions: dict[str, frozenset[PlayerRowAction]],
+    recent_pick_positions: tuple[str, ...] = (),
+    market_adp: dict[str, float] | None = None,
+    projected_points: dict[str, float] | None = None,
 ) -> BrowserObservation:
     round_number = max(1, (max(1, current_pick_number) - 1) // target.teams + 1)
     pick_in_round = (max(1, current_pick_number) - 1) % target.teams + 1
@@ -505,6 +503,9 @@ def _observation(
         clock_precision_ms=1_000 if clock_remaining_ms is not None else None,
         available_players=None,
         player_row_actions=row_actions,
+        recent_pick_positions=recent_pick_positions,
+        market_adp=market_adp or {},
+        projected_points=projected_points or {},
     )
 
 
@@ -581,6 +582,21 @@ def _drafted_source_players(cells: Sequence[Mapping[str, Any]], board: Board) ->
     return frozenset(drafted)
 
 
+def _recent_pick_positions(cells: Sequence[Mapping[str, Any]], window: int = 12) -> tuple[str, ...]:
+    """Read draft-cell positions in chronological pick order for run analysis."""
+
+    chronological: list[tuple[int, str]] = []
+    for cell in cells:
+        cell_id = _CELL_ID.match(str(cell.get("id", "")))
+        classes = {str(value) for value in cell.get("classes", ())}
+        if cell_id is None or "drafted" not in classes:
+            continue
+        position = _POSITION.search(str(cell.get("text", "")))
+        if position is not None:
+            chronological.append((int(cell_id["pick"]), position["position"].upper()))
+    return tuple(position for _, position in sorted(chronological)[-window:])
+
+
 def _roster_positions(
     cells: Sequence[Mapping[str, Any]], board: Board, target: SleeperBrowserTarget
 ) -> tuple[str, ...]:
@@ -611,6 +627,35 @@ def _row_actions(rows: Sequence[Mapping[str, Any]], board: Board) -> dict[str, f
             visible_actions.add(PlayerRowAction.DETAILS)
         actions[name] = frozenset(visible_actions)
     return actions
+
+
+def _market_metrics(rows: Sequence[Mapping[str, Any]], board: Board) -> tuple[dict[str, float], dict[str, float]]:
+    """Extract only visible Sleeper ADP and projected-points columns.
+
+    Sleeper virtualizes the table, so this is intentionally a partial snapshot:
+    the VBD policy stays neutral unless it has enough position peers. The
+    continuous lookahead worker can accumulate these observations off-clock.
+    """
+
+    adp: dict[str, float] = {}
+    projections: dict[str, float] = {}
+    for row in rows:
+        text = str(row.get("text", ""))
+        if (name := _resolve_board_player(text, board)) is None:
+            continue
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        try:
+            name_index = next(index for index, line in enumerate(lines) if normalize_name(line) == normalize_name(name))
+            # Sleeper's visible order is Player, Position, Team, ADP, Bye,
+            # Projected Points, Average. Reject malformed or shifted rows.
+            adp_value = float(lines[name_index + 3])
+            points_value = float(lines[name_index + 5])
+        except (IndexError, StopIteration, ValueError):
+            continue
+        if adp_value >= 0 and points_value >= 0:
+            adp[name] = adp_value
+            projections[name] = points_value
+    return adp, projections
 
 
 def _resolve_board_player(text: str, board: Board) -> str | None:

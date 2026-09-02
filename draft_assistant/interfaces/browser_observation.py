@@ -76,6 +76,10 @@ class BrowserObservation:
     available_players: frozenset[str] | None = None
     news_reviews: dict[str, NewsReview] | None = None
     sleeper_ranked_specialists: dict[str, tuple[str, ...]] | None = None
+    market_adp: dict[str, float] | None = None
+    projected_points: dict[str, float] | None = None
+    sleeper_specialist_points: dict[str, dict[str, float]] | None = None
+    recent_pick_positions: tuple[str, ...] = ()
     player_row_actions: dict[str, frozenset[PlayerRowAction]] | None = None
     blocker: BrowserBlocker | None = None
 
@@ -106,4 +110,8 @@ class BrowserObservation:
             available_players=self.available_players,
             news_reviews=self.news_reviews or {},
             sleeper_ranked_specialists=self.sleeper_ranked_specialists or {},
+            market_adp=self.market_adp or {},
+            projected_points=self.projected_points or {},
+            sleeper_specialist_points=self.sleeper_specialist_points or {},
+            recent_pick_positions=self.recent_pick_positions,
         )

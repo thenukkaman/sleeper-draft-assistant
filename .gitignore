@@ -18,6 +18,11 @@ env/
 # Local runtime state: can contain draft-specific observations or browser details.
 runtime/
 *.local.json
+tmp/
+output/
+draft_assistant/board.json
+draft_assistant/harmon_wr_2026.json
+draft_assistant/harmon_rookie_wr_2026.json
 
 # Editors and operating-system files
 .vscode/

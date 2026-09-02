@@ -25,6 +25,8 @@ class Board:
     avoid_rules: dict[str, str]
     pick_plan: dict[str, str]
     rsp_adjustments: dict[str, dict[str, Any]]
+    harmon_wr_adjustments: dict[str, dict[str, Any]]
+    harmon_rookie_wr_adjustments: dict[str, dict[str, Any]]
 
     @property
     def by_normalized_name(self) -> dict[str, Player]:
@@ -52,6 +54,12 @@ class Board:
     def rsp_adjustment(self, player_name: str) -> dict[str, Any] | None:
         return self.rsp_adjustments.get(normalize_name(player_name))
 
+    def harmon_wr_adjustment(self, player_name: str) -> dict[str, Any] | None:
+        return self.harmon_wr_adjustments.get(normalize_name(player_name))
+
+    def harmon_rookie_wr_adjustment(self, player_name: str) -> dict[str, Any] | None:
+        return self.harmon_rookie_wr_adjustments.get(normalize_name(player_name))
+
 
 def load_board(path: Path) -> Board:
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -67,6 +75,10 @@ def load_board(path: Path) -> Board:
                     draftable=not name.startswith("Platform QB"),
                 )
             )
+    harmon_path = path.with_name("harmon_wr_2026.json")
+    harmon_raw = json.loads(harmon_path.read_text(encoding="utf-8")) if harmon_path.exists() else {"players": {}}
+    rookie_harmon_path = path.with_name("harmon_rookie_wr_2026.json")
+    rookie_harmon_raw = json.loads(rookie_harmon_path.read_text(encoding="utf-8")) if rookie_harmon_path.exists() else {"players": {}}
     return Board(
         meta=raw["meta"],
         players=tuple(players),
@@ -76,6 +88,20 @@ def load_board(path: Path) -> Board:
         rsp_adjustments={
             normalize_name(name): dict(details)
             for name, details in raw.get("rsp_adjustments", {}).items()
+        },
+        harmon_wr_adjustments={
+            normalize_name(name): {"rank": int(details[0]), "tier": int(details[1])}
+            for name, details in harmon_raw.get("players", {}).items()
+        },
+        harmon_rookie_wr_adjustments={
+            normalize_name(name): {
+                **dict(details),
+                "composite": round(
+                    float(details["man"]) * 0.4 + float(details["zone"]) * 0.4 + float(details["press"]) * 0.2,
+                    2,
+                ),
+            }
+            for name, details in rookie_harmon_raw.get("players", {}).items()
         },
     )
 
