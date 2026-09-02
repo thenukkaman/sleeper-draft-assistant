@@ -544,7 +544,23 @@ _DOM_SNAPSHOT_SCRIPT = f"""() => {{
     bodyText: text(document.body),
     draftCells,
     playerRows: rows,
-    hasUnexpectedDialog: Boolean(document.querySelector('[role=dialog][aria-modal=true]')),
-    dialogTexts: Array.from(document.querySelectorAll('[role=dialog]')).map(text),
+    // Cookie providers can leave a zero-sized, "visible" role=dialog in the
+    // DOM after the user has dismissed the banner.  It is not an interaction
+    // blocker.  Only report dialogs that have an on-screen rendering box;
+    // real modals still stop the worker before it can draft.
+    hasUnexpectedDialog: Array.from(document.querySelectorAll('[role=dialog][aria-modal=true]')).some((dialog) => {{
+      const rect = dialog.getBoundingClientRect();
+      const style = window.getComputedStyle(dialog);
+      return rect.width > 1 && rect.height > 1 &&
+        style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0;
+    }}),
+    dialogTexts: Array.from(document.querySelectorAll('[role=dialog]'))
+      .filter((dialog) => {{
+        const rect = dialog.getBoundingClientRect();
+        const style = window.getComputedStyle(dialog);
+        return rect.width > 1 && rect.height > 1 &&
+          style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0;
+      }})
+      .map(text),
   }};
 }}"""
