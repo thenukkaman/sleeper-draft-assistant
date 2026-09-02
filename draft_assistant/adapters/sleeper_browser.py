@@ -26,7 +26,6 @@ class SleeperDomTransport(Protocol):
 
     def set_auto_pick_off(self) -> None: ...
 
-    def wait_for_visible_draft_change(self, timeout_seconds: float) -> bool: ...
 
 
 class SleeperBrowserDraftRoom(DraftRoom):
@@ -81,8 +80,3 @@ class SleeperBrowserDraftRoom(DraftRoom):
         if observation is None or observation.auto_pick_enabled is not True:
             raise RuntimeError("Auto-pick was not visibly enabled in the last Sleeper observation.")
         self.transport.set_auto_pick_off()
-
-    def wait_for_change(self, timeout_seconds: float) -> bool:
-        """Wake the next observation when the rendered draft surface changes."""
-
-        return self.transport.wait_for_visible_draft_change(timeout_seconds)

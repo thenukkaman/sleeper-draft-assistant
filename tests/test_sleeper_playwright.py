@@ -16,7 +16,6 @@ from draft_assistant.interfaces.browser_observation import BrowserBlockerKind, P
 class _Button:
     def __init__(self) -> None:
         self.clicks = 0
-        self.waits: list[dict[str, object]] = []
 
     def is_visible(self) -> bool:
         return True
@@ -24,8 +23,6 @@ class _Button:
     def click(self, **kwargs) -> None:
         self.clicks += 1
 
-    def wait_for(self, **kwargs) -> None:
-        self.waits.append(kwargs)
 
 
 class _Locator:
@@ -207,7 +204,6 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
 
         self.assertEqual(search.filled, ["Josh Allen"])
         self.assertEqual(row.waits, 1)
-        self.assertEqual(button.waits, [{"state": "visible", "timeout": 500}])
         self.assertEqual(button.clicks, 1)
 
     def test_transport_never_substitutes_a_nonmatching_row(self) -> None:
