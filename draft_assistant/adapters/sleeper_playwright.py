@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import json
+from pathlib import Path
 import re
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from ..board import Board, normalize_name
@@ -74,6 +77,7 @@ def connect_local_cdp(
     endpoint: str,
     board: Board,
     target: SleeperBrowserTarget,
+    visual_audit_dir: Path | None = None,
 ) -> SleeperPlaywrightSession:
     """Attach only to an existing local browser debugging endpoint.
 
@@ -96,7 +100,7 @@ def connect_local_cdp(
                 f"found {len(pages)}."
             )
         return SleeperPlaywrightSession(
-            transport=SleeperPlaywrightTransport(pages[0], board, target),
+            transport=SleeperPlaywrightTransport(pages[0], board, target, visual_audit_dir),
             _playwright=playwright,
         )
     except Exception:
@@ -111,6 +115,7 @@ def enter_live_draftroom_local_cdp(
     board: Board,
     target: SleeperBrowserTarget,
     timeout_ms: int = 15_000,
+    visual_audit_dir: Path | None = None,
 ) -> SleeperPlaywrightSession:
     """Click only approved live-league DRAFTROOM, then attach to the room.
 
@@ -153,7 +158,7 @@ def enter_live_draftroom_local_cdp(
         room_control.click()
         page.wait_for_url("**/draft/nfl/**", timeout=timeout_ms)
         return SleeperPlaywrightSession(
-            transport=SleeperPlaywrightTransport(page, board, target),
+            transport=SleeperPlaywrightTransport(page, board, target, visual_audit_dir),
             _playwright=playwright,
         )
     except Exception:
@@ -184,10 +189,21 @@ class SleeperPlaywrightTransport:
     Playwright sync ``Page`` instance through ``connect_local_cdp``.
     """
 
-    def __init__(self, page: Any, board: Board, target: SleeperBrowserTarget) -> None:
+    def __init__(
+        self,
+        page: Any,
+        board: Board,
+        target: SleeperBrowserTarget,
+        visual_audit_dir: Path | None = None,
+    ) -> None:
         self.page = page
         self.board = board
         self.target = target
+        # Opt-in diagnostic recorder.  It observes the rendered page only; it
+        # never supplies an action target.  Keeping it off by default avoids
+        # adding screenshot latency to a live pick.
+        self.visual_audit_dir = visual_audit_dir
+        self._last_visual_key: tuple[Any, ...] | None = None
 
     def observe_visible_draft_room(self) -> BrowserObservation:
         """Read one coherent visible-DOM snapshot and normalize it fail-closed."""
@@ -204,7 +220,72 @@ class SleeperPlaywrightTransport:
                 BrowserBlockerKind.UNRESPONSIVE,
                 "Sleeper DOM read returned no structured snapshot.",
             )
-        return observation_from_dom_snapshot(raw, self.board, self.target)
+        observation = observation_from_dom_snapshot(raw, self.board, self.target)
+        self._record_visual_audit(observation)
+        return observation
+
+    def _record_visual_audit(self, observation: BrowserObservation) -> None:
+        """Capture rendered evidence on state transitions when explicitly enabled.
+
+        The screenshot is evidence, not a source of truth for player entry:
+        the worker still uses the semantic DOM control to submit a pick.  This
+        lets post-mortems answer whether the visible clock, active pick, and
+        draft state agreed at the moment the worker acted.
+        """
+
+        if self.visual_audit_dir is None:
+            return
+        screenshot = getattr(self.page, "screenshot", None)
+        if not callable(screenshot):
+            return
+        remaining = observation.clock_remaining_ms
+        # Capture the opening state and meaningful clock edges, not every
+        # 250-ms poll.  Exact remaining time stays in the sidecar metadata.
+        clock_phase = (
+            "none"
+            if remaining is None
+            else next((threshold for threshold in (120_000, 60_000, 30_000, 10_000, 0) if remaining <= threshold), 120_000)
+        )
+        key = (
+            observation.draft_status,
+            observation.current_pick_number,
+            observation.pick_label,
+            clock_phase,
+            observation.auto_pick_enabled,
+            tuple(sorted(observation.drafted_players)),
+        )
+        if key == self._last_visual_key:
+            return
+        self._last_visual_key = key
+        self.visual_audit_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc)
+        stem = f"{stamp.strftime('%Y%m%dT%H%M%S.%fZ')}-{observation.current_pick_number:03d}"
+        image_path = self.visual_audit_dir / f"{stem}.png"
+        metadata_path = self.visual_audit_dir / f"{stem}.json"
+        try:
+            screenshot(path=str(image_path), animations="disabled")
+            metadata_path.write_text(
+                json.dumps(
+                    {
+                        "captured_at": stamp.isoformat(),
+                        "image": image_path.name,
+                        "draft_status": observation.draft_status,
+                        "pick_label": observation.pick_label,
+                        "current_pick_number": observation.current_pick_number,
+                        "clock_remaining_ms": observation.clock_remaining_ms,
+                        "auto_pick_enabled": observation.auto_pick_enabled,
+                        "blocker": observation.blocker.summary if observation.blocker else None,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            # Diagnostics must never block or change the draft decision path.
+            # Leave the transition key advanced so a broken screenshot backend
+            # cannot repeatedly consume the pick clock.
+            return
 
     def reveal_player_row(self, player_name: str) -> None:
         """Use Sleeper's named player search; this never submits a draft pick."""

@@ -41,6 +41,11 @@ def main() -> int:
     parser.add_argument("--username", required=True)
     parser.add_argument("--draft-slot", type=int, required=True)
     parser.add_argument("--runtime-dir", type=Path, default=Path("runtime"))
+    parser.add_argument(
+        "--visual-audit",
+        action="store_true",
+        help="Save a screenshot plus state metadata whenever rendered draft state changes.",
+    )
     parser.add_argument("--mode", choices=("live", "attached-draft"), required=True)
     parser.add_argument("--max-cycles", type=int, help="Controlled rehearsal only; omit for a full session.")
     parser.add_argument(
@@ -66,11 +71,16 @@ def main() -> int:
     board = load_default_board()
     run_directory = args.runtime_dir / _utc_now().strftime("%Y%m%dT%H%M%SZ")
     run_directory.mkdir(parents=True, exist_ok=False)
+    visual_audit_dir = run_directory / "visual" if args.visual_audit else None
 
     browser_session = (
-        enter_live_draftroom_local_cdp(args.cdp_endpoint, board, target)
+        enter_live_draftroom_local_cdp(
+            args.cdp_endpoint, board, target, visual_audit_dir=visual_audit_dir
+        )
         if args.mode == "live"
-        else connect_local_cdp(args.cdp_endpoint, board, target)
+        else connect_local_cdp(
+            args.cdp_endpoint, board, target, visual_audit_dir=visual_audit_dir
+        )
     )
     try:
         policy = SleeperRankedSpecialTeamsPolicy(SourceBoardPolicy())
