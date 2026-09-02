@@ -272,6 +272,12 @@ class SleeperPlaywrightTransport:
                 raise SleeperPlaywrightTransportError(
                     f"Sleeper did not expose exactly one visible DRAFT button for {player_name!r}."
                 )
+            wait_for = getattr(button, "wait_for", None)
+            if callable(wait_for):
+                # React can publish the row and its child action in separate
+                # commits. Wait only for this exact control, not for a generic
+                # page-idle condition, so the clock remains bounded.
+                wait_for(state="visible", timeout=500)
             # Sleeper renders this as a 24px <div>, not a native button. The
             # exact normalized row and visible semantic control were just
             # revalidated, so dispatch directly rather than spending the pick
