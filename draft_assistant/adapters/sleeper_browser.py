@@ -26,6 +26,8 @@ class SleeperDomTransport(Protocol):
 
     def set_auto_pick_off(self) -> None: ...
 
+    def dismiss_player_card(self) -> bool: ...
+
 
 
 class SleeperBrowserDraftRoom(DraftRoom):
@@ -80,3 +82,8 @@ class SleeperBrowserDraftRoom(DraftRoom):
         if observation is None or observation.auto_pick_enabled is not True:
             raise RuntimeError("Auto-pick was not visibly enabled in the last Sleeper observation.")
         self.transport.set_auto_pick_off()
+
+    def dismiss_player_card(self) -> bool:
+        """Dismiss only a positively identified Sleeper player-details card."""
+
+        return self.transport.dismiss_player_card()

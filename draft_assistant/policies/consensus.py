@@ -54,9 +54,12 @@ class ConsensusModel:
         alignment = pstdev(values.values()) if len(values) > 1 else 1.0
         three_way = set(usable) == {"jj", "waldman", "harmon"}
         two_way = len(usable) >= 2
-        if three_way and alignment <= self.gold_alignment_ceiling and score >= 0.60:
+        # Labels communicate corroboration, not draft cost. A tightly aligned
+        # late-round player should still display the analyst signal; the
+        # weighted score and live VBD decide how aggressively to draft him.
+        if three_way and alignment <= self.gold_alignment_ceiling:
             label = "GOLD"
-        elif two_way and alignment <= self.strong_alignment_ceiling and score >= 0.55:
+        elif two_way and alignment <= self.strong_alignment_ceiling:
             label = "STRONG"
         elif score >= 0.55:
             label = "VALUE"

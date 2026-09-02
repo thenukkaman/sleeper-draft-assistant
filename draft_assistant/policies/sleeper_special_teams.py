@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from ..board import Board
+from ..board import Board, normalize_name
 from ..models import Candidate, DraftState, Player, Recommendation, Tag
 from .base import DraftPolicy
 from .value_model import ValueModel
@@ -43,13 +43,23 @@ class SleeperRankedSpecialTeamsPolicy:
                 warnings=("Browser adapter must capture the visible Sleeper specialist order before acting.",),
                 requires_special_teams_policy=True,
             )
+        drafted = {normalize_name(name) for name in state.drafted_players}
+        available_names = tuple(name for name in names if normalize_name(name) not in drafted)
+        if not available_names:
+            return Recommendation(
+                policy_name=self.name,
+                candidates=(),
+                directive=f"Draft one {required_position}, but Sleeper exposed no undrafted specialist.",
+                warnings=("Refresh Sleeper's visible specialist list before acting.",),
+                requires_special_teams_policy=True,
+            )
         candidates = tuple(
             Candidate(
                 player=Player(name=name, position=required_position, rank=rank, tag=Tag.NONE),
                 score=1000 - rank,
                 reason=f"Highest currently available Sleeper-ranked {required_position}.",
             )
-            for rank, name in enumerate(names[:limit], start=1)
+            for rank, name in enumerate(available_names[:limit], start=1)
         )
         return Recommendation(
             policy_name=self.name,

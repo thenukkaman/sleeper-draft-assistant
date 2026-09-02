@@ -6,7 +6,10 @@ from draft_assistant.adapters.sleeper_playwright import (
     SleeperBrowserTarget,
     SleeperPlaywrightTransport,
     SleeperPlaywrightTransportError,
+    _known_specialist_drafted,
     _resolve_board_player,
+    _sleeper_abbreviation,
+    _visible_specialist_names,
     observation_from_dom_snapshot,
 )
 from draft_assistant.board import load_default_board
@@ -127,6 +130,7 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
                 },
             ],
             "hasUnexpectedDialog": False,
+            "playerCardOpen": False,
         }
         raw.update(changes)
         return raw
@@ -171,12 +175,74 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
         self.assertIsNotNone(observation.blocker)
         self.assertIn("Cookie-consent", observation.blocker.summary)
 
+    def test_names_a_player_card_for_safe_dismissal(self) -> None:
+        observation = observation_from_dom_snapshot(
+            self._raw(playerCardOpen=True), self.board, self.target
+        )
+
+        self.assertIsNotNone(observation.blocker)
+        self.assertEqual(observation.blocker.kind, BrowserBlockerKind.PLAYER_CARD)
+
     def test_resolves_sleeper_abbreviations_without_brown_name_collision(self) -> None:
         self.assertEqual(_resolve_board_player("2.08\nA. Brown\nWR - NE", self.board), "AJ Brown")
         self.assertEqual(
             _resolve_board_player("2.03\nA. St. Brown\nWR - DET", self.board),
             "Amon-Ra St. Brown",
         )
+
+    def test_does_not_mistake_a_compound_given_name_for_a_surname_particle(self) -> None:
+        self.assertEqual(_sleeper_abbreviation("De'Von Achane"), "dachane")
+        self.assertEqual(
+            _resolve_board_player("2.02\nD. Achane\nRB - MIA", self.board),
+            "De'Von Achane",
+        )
+
+    def test_resolves_a_unique_truncated_sleeper_draft_cell(self) -> None:
+        self.assertEqual(_sleeper_abbreviation("Jaxon Smith-Njigba"), "jsmithnjigba")
+        self.assertEqual(
+            _resolve_board_player("7.07\nJ. Smith-N...\nWR - SEA", self.board),
+            "Jaxon Smith-Njigba",
+        )
+
+    def test_extracts_specialists_only_from_rendered_sleeper_position_rows(self) -> None:
+        rows = (
+            {"text": "1\nC. Boswell\nK - PIT"},
+            {"text": "2\nD. Carlson\nK - LV"},
+            {"text": "3\nM. Nabers\nWR - NYG"},
+            {"text": "4\nL. Chargers\nDEF - LAC"},
+        )
+
+        self.assertEqual(_visible_specialist_names(rows, "K"), ("C. Boswell", "D. Carlson"))
+        self.assertEqual(_visible_specialist_names(rows, "DEF"), ("L. Chargers",))
+
+    def test_retains_visible_specialist_draft_action_outside_analyst_board(self) -> None:
+        observation = observation_from_dom_snapshot(
+            self._raw(
+                playerRows=[
+                    {
+                        "text": "190\nLos Angeles Chargers\nDEF\nLAC",
+                        "hasDraftButton": True,
+                        "hasQueueButton": True,
+                        "hasDetailsControl": True,
+                    }
+                ]
+            ),
+            self.board,
+            self.target,
+        )
+
+        self.assertEqual(
+            observation.player_row_actions["Los Angeles Chargers"],
+            frozenset({PlayerRowAction.DRAFT, PlayerRowAction.QUEUE, PlayerRowAction.DETAILS}),
+        )
+
+    def test_resolves_abbreviated_drafted_specialist_against_visible_rank_list(self) -> None:
+        drafted = _known_specialist_drafted(
+            ({"text": "17.5\nD. Lions\nDEF - DET", "classes": ["drafted"]},),
+            {"DEF": ("Detroit Lions", "Dallas Cowboys")},
+        )
+
+        self.assertEqual(drafted, {"Detroit Lions"})
 
     def test_refuses_a_draft_room_without_one_active_countdown_cell(self) -> None:
         raw = self._raw(draftCells=[])
@@ -192,6 +258,18 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
         self.assertIsNone(observation.blocker)
         self.assertEqual(observation.draft_status, "waiting")
         self.assertEqual(observation.our_pick_number, 5)
+
+    def test_recognizes_a_full_18_pick_roster_as_draft_complete(self) -> None:
+        observation = observation_from_dom_snapshot(
+            self._raw(
+                bodyText="North Redmond 40\nkenikh\nAll\n18/18",
+                draftCells=self._raw()["draftCells"][:-1],
+            ),
+            self.board,
+            self.target,
+        )
+
+        self.assertEqual(observation.draft_status, "completed")
 
     def test_transport_searches_the_exact_row_before_clicking_its_draft_button(self) -> None:
         button = _Button()

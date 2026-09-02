@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import unittest
 
 from draft_assistant.autonomy import AutonomousDraftGuard
-from draft_assistant.board import load_default_board
+from draft_assistant.board import canonical_name_key, load_default_board
 from draft_assistant.interfaces.browser_observation import (
     BrowserBlocker,
     BrowserBlockerKind,
@@ -15,7 +16,7 @@ from draft_assistant.interfaces.browser_observation import (
 from draft_assistant.interfaces.sleeper_draftboard import parse_visible_draftboard
 from draft_assistant.live_driver import ClockFirstDraftDriver
 from draft_assistant.lookahead import LookaheadPlanner, pick_label_for_number
-from draft_assistant.models import DraftState, NewsDecision, NewsReview
+from draft_assistant.models import DraftState, NewsDecision, NewsReview, Tag
 from draft_assistant.policies.sleeper_special_teams import SleeperRankedSpecialTeamsPolicy
 from draft_assistant.policies.source_board import SourceBoardPolicy
 from draft_assistant.policies.value_model import ValueModel
@@ -31,7 +32,7 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertEqual(result.primary.player.name, "Josh Allen")
         self.assertEqual(result.candidates[1].player.name, "Lamar Jackson")
 
-    def test_round_two_forces_a_viable_qb2_before_bowers(self) -> None:
+    def test_round_two_allows_tep_value_to_beat_a_close_qb2(self) -> None:
         result = self.policy.recommend(
             self.board,
             DraftState(
@@ -41,8 +42,26 @@ class SourceBoardPolicyTests(unittest.TestCase):
                 drafted_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye", "Jayden Daniels", "Jalen Hurts"}),
             ),
         )
-        self.assertEqual(result.primary.player.name, "Justin Herbert")
-        self.assertIn("QB2", result.directive)
+        self.assertEqual(result.primary.player.name, "Brock Bowers")
+        self.assertIn("Value first", result.directive)
+
+    def test_te2_is_value_eligible_but_te3_is_luxury_until_rb_wr_depth_is_set(self) -> None:
+        bowers = self.board.by_normalized_name["brockbowers"]
+        state = DraftState(round_number=7, pick_label="7.05")
+
+        te2 = SourceBoardPolicy._roster_coverage_urgency(
+            bowers, Counter({"QB": 1, "RB": 2, "WR": 3, "TE": 1}), state
+        )
+        te3_with_thin_rb = SourceBoardPolicy._roster_coverage_urgency(
+            bowers, Counter({"QB": 1, "RB": 2, "WR": 3, "TE": 2}), state
+        )
+        te3_after_depth = SourceBoardPolicy._roster_coverage_urgency(
+            bowers, Counter({"QB": 1, "RB": 3, "WR": 3, "TE": 2}), state
+        )
+
+        self.assertGreater(te2, -10_000.0)
+        self.assertEqual(te3_with_thin_rb, -10_000.0)
+        self.assertEqual(te3_after_depth, -60.0)
 
     def test_avoid_stays_behind_an_ordinary_source_value_before_it_falls_far_enough(self) -> None:
         result = self.policy.recommend(
@@ -57,6 +76,23 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertEqual(result.primary.player.name, "Saquon Barkley")
         self.assertIn("Jonathan Taylor", [candidate.player.name for candidate in result.candidates])
         self.assertTrue(result.candidates[1].discounted_avoid)
+
+    def test_personal_shade_lowers_final_rank_without_changing_a_tag(self) -> None:
+        nabers = self.board.preference_adjustment("Malik Nabers")
+        taylor = self.board.preference_adjustment("Jonathan Taylor")
+        self.assertEqual(nabers, {"label": "SHADE", "slots": -5})
+        self.assertEqual(taylor, {"label": "SHADE", "slots": -5})
+        self.assertEqual(self.board.personal_tag("Malik Nabers"), Tag.NONE)
+        self.assertEqual(self.board.personal_tag("Jonathan Taylor"), Tag.AVOID)
+
+    def test_personal_glaze_raises_final_rank_without_creating_a_target_tag(self) -> None:
+        tate = self.board.preference_adjustment("Carnell Tate")
+        self.assertEqual(tate, {"label": "GLAZE", "slots": 4})
+        self.assertEqual(self.board.personal_tag("Carnell Tate"), Tag.NONE)
+
+    def test_verified_platform_alias_resolves_to_the_board_player(self) -> None:
+        self.assertEqual(canonical_name_key("Jonathon Brooks"), "jonathanbrooks")
+        self.assertEqual(self.board.by_normalized_name["jonathonbrooks"].name, "Jonathan Brooks")
 
     def test_avoid_can_be_selected_as_a_late_discounted_value(self) -> None:
         result = self.policy.recommend(
@@ -114,7 +150,7 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertEqual(result.primary.player.name, "Josh Jacobs")
         self.assertTrue(gate.allowed)
 
-    def test_rsp_overlay_breaks_a_late_upside_tie_without_rewriting_the_board(self) -> None:
+    def test_triple_winner_can_settle_a_close_late_rookie_tier(self) -> None:
         result = self.policy.recommend(
             self.board,
             DraftState(
@@ -125,10 +161,11 @@ class SourceBoardPolicyTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(result.primary.player.name, "Rome Odunze")
+        self.assertEqual(result.primary.player.name, "Carnell Tate")
         self.assertIn("Harmon WR overlay", result.primary.reason)
+        self.assertIn("TRIPLE-WINNER TARGET", result.primary.reason)
 
-    def test_harmon_rookie_coverage_and_waldman_overlap_creates_a_strong_target(self) -> None:
+    def test_harmon_rookie_coverage_and_waldman_overlap_is_retained_in_candidate_reasoning(self) -> None:
         result = self.policy.recommend(
             self.board,
             DraftState(
@@ -138,9 +175,10 @@ class SourceBoardPolicyTests(unittest.TestCase):
                 available_players=frozenset({"KC Concepcion", "Carnell Tate", "Makai Lemon"}),
             ),
         )
-        self.assertEqual(result.primary.player.name, "KC Concepcion")
-        self.assertIn("Harmon rookie coverage composite", result.primary.reason)
-        self.assertIn("TRIPLE-WINNER TARGET", result.primary.reason)
+        by_name = {candidate.player.name: candidate for candidate in result.candidates}
+        self.assertEqual(result.primary.player.name, "Carnell Tate")
+        self.assertIn("Harmon rookie coverage composite", by_name["KC Concepcion"].reason)
+        self.assertIn("TRIPLE-WINNER TARGET", by_name["KC Concepcion"].reason)
 
     def test_avoid_clearance_is_explicit_and_round_sensitive(self) -> None:
         player = self.board.by_normalized_name["jonathantaylor"]
@@ -195,6 +233,20 @@ class SourceBoardPolicyTests(unittest.TestCase):
             result,
         )
         self.assertTrue(gate.allowed)
+
+    def test_specialist_policy_skips_a_name_already_drafted(self) -> None:
+        result = SleeperRankedSpecialTeamsPolicy(self.policy).recommend(
+            self.board,
+            DraftState(
+                round_number=17,
+                pick_label="17.05",
+                roster_positions=("QB", "RB", "RB", "WR", "WR", "TE"),
+                drafted_players=frozenset({"Denver Broncos"}),
+                sleeper_ranked_specialists={"DEF": ("Denver Broncos", "Philadelphia Eagles")},
+            ),
+        )
+
+        self.assertEqual(result.primary.player.name, "Philadelphia Eagles")
 
     def test_autonomy_guard_blocks_another_team_pick(self) -> None:
         state = DraftState(
@@ -344,6 +396,55 @@ class SourceBoardPolicyTests(unittest.TestCase):
 
         self.assertFalse(attempt.acted)
         self.assertIn("semantic DRAFT control", attempt.reason)
+
+    def test_clock_driver_dismisses_a_verified_player_card_before_selecting(self) -> None:
+        class Room:
+            def __init__(self, observation):
+                self.observation = observation
+                self.dismissals = 0
+                self.picks = []
+
+            def observe(self):
+                return self.observation
+
+            def dismiss_player_card(self):
+                self.dismissals += 1
+                self.observation = replace(self.observation, blocker=None)
+                return True
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+                self.observation = replace(
+                    self.observation,
+                    drafted_players=self.observation.drafted_players | frozenset({player_name}),
+                    current_pick_number=self.observation.current_pick_number + 1,
+                )
+
+        observation = BrowserObservation(
+            league_id="league-1",
+            username="kenikh",
+            draft_status="drafting",
+            auto_pick_enabled=False,
+            round_number=1,
+            pick_label="1.05",
+            current_pick_number=5,
+            our_pick_number=5,
+            roster_positions=(),
+            drafted_players=frozenset(),
+            available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+            blocker=BrowserBlocker(BrowserBlockerKind.PLAYER_CARD, "Sleeper player-details card is open."),
+        )
+        room = Room(observation)
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(room)
+
+        self.assertTrue(attempt.confirmed)
+        self.assertEqual(room.dismissals, 1)
+        self.assertEqual(room.picks, ["Josh Allen"])
 
     def test_clock_driver_can_reveal_one_virtualized_player_row_then_revalidate(self) -> None:
         class Room:

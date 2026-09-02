@@ -13,7 +13,7 @@ from typing import Callable, Protocol
 
 from .autonomy import AutonomousDraftGuard, ExecutionGate
 from .board import Board, normalize_name
-from .interfaces.browser_observation import BrowserObservation
+from .interfaces.browser_observation import BrowserBlockerKind, BrowserObservation
 from .lookahead import PreparedPick
 from .models import Recommendation
 from .policies.base import DraftPolicy
@@ -113,6 +113,7 @@ class ClockFirstDraftDriver:
 
         first = initial_observation or room.observe()
         event("initial_observation")
+        first = self._dismiss_player_card_if_present(room, first, event)
         if first.blocker is not None:
             return self._blocked_by_browser(first, None)
         recovery = self._recover_auto_pick(room, first, event)
@@ -152,6 +153,7 @@ class ClockFirstDraftDriver:
         # The UI may change in the milliseconds between recommendation and click.
         commit = room.observe()
         event("commit_observation")
+        commit = self._dismiss_player_card_if_present(room, commit, event)
         if commit.blocker is not None:
             return self._blocked_by_browser(commit, recovery)
         commit_recovery = self._recover_auto_pick(room, commit, event)
@@ -361,6 +363,31 @@ class ClockFirstDraftDriver:
             if recommendation is not None:
                 return recommendation
         return self.policy.recommend(self.board, state)
+
+    @staticmethod
+    def _dismiss_player_card_if_present(
+        room: DraftRoom,
+        observation: BrowserObservation,
+        event: Callable[[str], None],
+    ) -> BrowserObservation:
+        """Recover only Sleeper's positively identified player-details card.
+
+        A card has no draft semantics; it is safe to close with the transport's
+        exact Escape-only recovery and immediately re-observe. Unknown dialogs
+        deliberately remain fail-closed for a human decision.
+        """
+
+        if observation.blocker is None or observation.blocker.kind != BrowserBlockerKind.PLAYER_CARD:
+            return observation
+        dismiss = getattr(room, "dismiss_player_card", None)
+        if not callable(dismiss):
+            return observation
+        event("player_card_dismiss_requested")
+        if not dismiss():
+            return observation
+        cleared = room.observe()
+        event("player_card_dismissed_observed")
+        return cleared
 
     def _blocked_by_browser(
         self,

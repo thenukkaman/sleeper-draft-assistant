@@ -9,7 +9,7 @@ coordinate.  It works only through visible DOM text and semantic controls.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
-from ..board import Board, normalize_name
+from ..board import Board, canonical_name_key, normalize_name, sleeper_search_name
 from ..interfaces.browser_observation import (
     BrowserBlocker,
     BrowserBlockerKind,
@@ -30,6 +30,7 @@ _DRAFT_ROUTE = "/draft/nfl/"
 _CELL_ID = re.compile(r"^draft-cell-(?P<pick>\d+)$")
 _CLOCK = re.compile(r"(?<!\d)(?P<minutes>\d{1,2}):(?P<seconds>\d{2})(?!\d)")
 _POSITION = re.compile(r"\b(?P<position>QB|RB|WR|TE|K|DEF)\b", re.IGNORECASE)
+_FULL_DRAFT_ROSTER = re.compile(r"\bAll\s*18\s*/\s*18\b", re.IGNORECASE)
 
 # Deliberately modest selectors, all verified again through visible text.  A
 # missing selector returns a blocker; it is never replaced with a coordinate.
@@ -204,6 +205,9 @@ class SleeperPlaywrightTransport:
         # adding screenshot latency to a live pick.
         self.visual_audit_dir = visual_audit_dir
         self._last_visual_key: tuple[Any, ...] | None = None
+        # Populated only from the currently visible Sleeper K/DEF filter.
+        # It is intentionally not a hand-maintained ranking list.
+        self._sleeper_ranked_specialists: dict[str, tuple[str, ...]] = {}
 
     def observe_visible_draft_room(self) -> BrowserObservation:
         """Read one coherent visible-DOM snapshot and normalize it fail-closed."""
@@ -221,8 +225,75 @@ class SleeperPlaywrightTransport:
                 "Sleeper DOM read returned no structured snapshot.",
             )
         observation = observation_from_dom_snapshot(raw, self.board, self.target)
+        required_position = self._required_specialist_position(observation)
+        if required_position and not self._sleeper_ranked_specialists.get(required_position):
+            self._capture_visible_specialist_ranks(required_position)
+        if self._sleeper_ranked_specialists:
+            # Sleeper abbreviates completed specialist cells (for example
+            # ``D. Lions``), while the ranked filter exposes the full name.
+            # Reconcile only against that already-rendered specialist list so
+            # post-click confirmation can prove the exact K/DST was drafted.
+            specialist_drafted = _known_specialist_drafted(
+                _as_mappings(raw.get("draftCells")), self._sleeper_ranked_specialists
+            )
+            if specialist_drafted:
+                observation = replace(
+                    observation,
+                    drafted_players=frozenset(set(observation.drafted_players) | specialist_drafted),
+                )
+        if self._sleeper_ranked_specialists:
+            observation = replace(
+                observation,
+                sleeper_ranked_specialists=dict(self._sleeper_ranked_specialists),
+            )
         self._record_visual_audit(observation)
         return observation
+
+    @staticmethod
+    def _required_specialist_position(observation: BrowserObservation) -> str | None:
+        """Return the only Sleeper position filter we may switch to now."""
+
+        if observation.draft_status != "drafting":
+            return None
+        roster = {position.upper() for position in observation.roster_positions}
+        if observation.round_number == 17 and "DEF" not in roster:
+            return "DEF"
+        if observation.round_number == 18 and "K" not in roster:
+            return "K"
+        return None
+
+    def _capture_visible_specialist_ranks(self, position: str) -> None:
+        """Select Sleeper's visible K/DEF chip and cache its rendered order.
+
+        This is a semantic filter interaction, never a coordinate click or an
+        API call.  A missing/ambiguous filter intentionally leaves the cache
+        empty so the late-round policy cannot guess a specialist.
+        """
+
+        try:
+            # A prior ordinary pick leaves its player name in this search
+            # field. Clear it before reading K/DEF, otherwise the position
+            # filter has no rendered rows to rank.
+            search = self.page.locator(_SEARCH_INPUT)
+            if search.count() == 1:
+                search.fill("", timeout=500)
+            clicked = self.page.evaluate(_SELECT_POSITION_FILTER_SCRIPT, position)
+            if not clicked:
+                return
+            # Sleeper's virtualized player list can take a few frames to
+            # replace after a K/DEF filter change. This bounded wait is only
+            # used in R17/R18, never on an ordinary timed pick.
+            self.page.wait_for_timeout(350)
+            raw = self.page.evaluate(_DOM_SNAPSHOT_SCRIPT)
+            if not isinstance(raw, Mapping):
+                return
+            names = _visible_specialist_names(_as_mappings(raw.get("playerRows")), position)
+            if names:
+                self._sleeper_ranked_specialists[position] = names
+        except Exception:
+            # A specialist rank read is advisory input.  The policy remains
+            # fail-closed rather than selecting from an unverified fallback.
+            return
 
     def _record_visual_audit(self, observation: BrowserObservation) -> None:
         """Capture rendered evidence on state transitions when explicitly enabled.
@@ -294,7 +365,7 @@ class SleeperPlaywrightTransport:
             search = self.page.locator(_SEARCH_INPUT)
             if search.count() != 1:
                 raise SleeperPlaywrightTransportError("Sleeper player search control was not uniquely visible.")
-            search.fill(player_name, timeout=500)
+            search.fill(self._search_query(player_name), timeout=500)
             row = self._wait_for_named_row(player_name)
             row.wait_for(state="visible", timeout=500)
         except Exception as error:
@@ -309,7 +380,7 @@ class SleeperPlaywrightTransport:
 
         try:
             search = self.page.locator(_SEARCH_INPUT)
-            search.fill(player_name, timeout=500)
+            search.fill(self._search_query(player_name), timeout=500)
             row = self._wait_for_named_row(player_name)
             # This is a readiness assertion, not a polling loop. On an
             # already rendered search result it completes immediately and
@@ -341,23 +412,83 @@ class SleeperPlaywrightTransport:
                 f"Could not issue the targeted Sleeper auto-pick disable: {type(error).__name__}."
             ) from error
 
+    def dismiss_player_card(self) -> bool:
+        """Close a verified player-details card and prove it disappeared.
+
+        Escape is a native, non-destructive modal close. It is used only after
+        the visible snapshot identifies Sleeper's player-details card, never
+        for a generic cookie, terms, or confirmation dialog.
+        """
+
+        try:
+            before = self.page.evaluate(_DOM_SNAPSHOT_SCRIPT)
+            if not isinstance(before, Mapping) or not bool(before.get("playerCardOpen")):
+                return False
+            self.page.keyboard.press("Escape")
+            after = self.page.evaluate(_DOM_SNAPSHOT_SCRIPT)
+            if not isinstance(after, Mapping) or bool(after.get("playerCardOpen")):
+                raise SleeperPlaywrightTransportError("Sleeper player card remained open after Escape.")
+            return True
+        except Exception as error:
+            if isinstance(error, SleeperPlaywrightTransportError):
+                raise
+            raise SleeperPlaywrightTransportError(
+                f"Could not dismiss the verified Sleeper player card: {type(error).__name__}."
+            ) from error
+
     def _named_row(self, player_name: str) -> Any:
         """Return one row only after text confirms the intended player name."""
 
-        expected = normalize_name(player_name)
+        # Sleeper's visible spelling occasionally differs from the board
+        # (e.g. Jonathon/Jonathan Brooks).  Resolve identity with the same
+        # canonical key the board uses, but keep the requested spelling only
+        # for diagnostics and the search box.
+        expected = canonical_name_key(player_name)
         rows = self.page.locator(_PLAYER_ROW)
         matching: list[Any] = []
         for index in range(rows.count()):
             row = rows.nth(index)
-            text = row.inner_text(timeout=150)
+            try:
+                text = row.inner_text(timeout=150)
+            except Exception as error:
+                # React can replace the virtualized row between the count and
+                # text read immediately after a search.  Normalize that short
+                # rendering gap so the bounded caller can retry the lookup;
+                # never reinterpret it as permission to click another row.
+                raise SleeperPlaywrightTransportError(
+                    "Sleeper player row was replaced while its visible text was being read."
+                ) from error
             resolved = _resolve_board_player(text, self.board)
-            if resolved is not None and normalize_name(resolved) == expected:
+            if resolved is not None and canonical_name_key(resolved) == expected:
                 matching.append(row)
+            elif resolved is None:
+                # K/DST are deliberately sourced from Sleeper's visible rank,
+                # not from the analyst board.  Their row is already narrowed
+                # by the relevant position filter, so accept only a literal
+                # displayed name (or the final team token for a DST such as
+                # ``Los Angeles Chargers`` rendered as ``L. Chargers``).
+                normalized_text = normalize_name(text)
+                full_name = normalize_name(player_name)
+                team_tail = normalize_name(player_name.rsplit(" ", 1)[-1])
+                if full_name in normalized_text or (
+                    team_tail and team_tail in normalized_text and _POSITION.search(text)
+                ):
+                    matching.append(row)
         if len(matching) != 1:
             raise SleeperPlaywrightTransportError(
                 f"Expected exactly one currently rendered Sleeper row for {player_name!r}; found {len(matching)}."
             )
         return matching[0]
+
+    def _search_query(self, player_name: str) -> str:
+        """Use a Sleeper-compatible query for board players and specialists."""
+
+        canonical = canonical_name_key(player_name)
+        if canonical in self.board.by_normalized_name:
+            return sleeper_search_name(player_name)
+        # Sleeper abbreviates team defenses in the visible grid.  Their final
+        # team word is unique after the DEF filter has been selected.
+        return player_name.rsplit(" ", 1)[-1]
 
     def _wait_for_named_row(self, player_name: str) -> Any:
         """Allow the virtualized Sleeper table a bounded time to apply search.
@@ -368,14 +499,19 @@ class SleeperPlaywrightTransport:
         """
 
         last_error: SleeperPlaywrightTransportError | None = None
-        for attempt in range(3):
+        # The player table is virtualized and can take several render frames
+        # to replace its prior row after a name search.  This is still a
+        # bounded, non-submitting preparation step: a one-second allowance is
+        # negligible against a two-minute clock and eliminates the observed
+        # React search-render race without retrying a draft action.
+        for attempt in range(14):
             try:
                 return self._named_row(player_name)
             except SleeperPlaywrightTransportError as error:
                 last_error = error
-                if attempt == 2:
+                if attempt == 13:
                     break
-                self.page.wait_for_timeout(50)
+                self.page.wait_for_timeout(75)
         assert last_error is not None
         raise last_error
 
@@ -416,12 +552,19 @@ def observation_from_dom_snapshot(
                 ("DRAFTROOM",),
             )
         return _blocked(target, BrowserBlockerKind.UNEXPECTED_DIALOG, "Sleeper is not on the approved draft-room route.")
+    if bool(raw.get("playerCardOpen")):
+        return _blocked(
+            target,
+            BrowserBlockerKind.PLAYER_CARD,
+            "Sleeper player-details card is open; dismiss the verified card before continuing.",
+            ("Dismiss player card",),
+        )
     if dialog_summary := _dialog_blocker_summary(raw, body_text):
         return _blocked(target, BrowserBlockerKind.UNEXPECTED_DIALOG, dialog_summary)
 
     current_pick, clock_remaining_ms = _current_pick_and_clock(cells)
     if current_pick is None or clock_remaining_ms is None:
-        if "Draft Complete" in body_text or "DRAFT COMPLETE" in body_text:
+        if "Draft Complete" in body_text or "DRAFT COMPLETE" in body_text or _FULL_DRAFT_ROSTER.search(body_text):
             return _observation(
                 target,
                 draft_status="completed",
@@ -536,6 +679,31 @@ def _as_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
     return tuple(item for item in value if isinstance(item, Mapping))
 
 
+def _visible_specialist_names(rows: Sequence[Mapping[str, Any]], position: str) -> tuple[str, ...]:
+    """Extract the ordered names from Sleeper's rendered K or DEF rows."""
+
+    expected = position.upper()
+    names: list[str] = []
+    for row in rows:
+        lines = [line.strip() for line in str(row.get("text", "")).splitlines() if line.strip()]
+        position_line = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if re.fullmatch(rf"{re.escape(expected)}(?:\s*-.*)?", line, flags=re.IGNORECASE)
+            ),
+            None,
+        )
+        if position_line is None or position_line == 0:
+            continue
+        name = lines[position_line - 1]
+        # Do not promote an ellipsized virtual-row label into an executable
+        # player name. Sleeper normally renders all specialist names in full.
+        if name and "…" not in name and "..." not in name and name not in names:
+            names.append(name)
+    return tuple(names)
+
+
 def _contains_exact_visible_text(text: str, value: str) -> bool:
     return any(line.strip().casefold() == value.casefold() for line in text.splitlines())
 
@@ -582,6 +750,34 @@ def _drafted_source_players(cells: Sequence[Mapping[str, Any]], board: Board) ->
     return frozenset(drafted)
 
 
+def _known_specialist_drafted(
+    cells: Sequence[Mapping[str, Any]], specialists: Mapping[str, Sequence[str]]
+) -> set[str]:
+    """Resolve only completed K/DST cells against Sleeper's visible rank cache."""
+
+    drafted: set[str] = set()
+    for cell in cells:
+        if "drafted" not in {str(value) for value in cell.get("classes", ())}:
+            continue
+        text = str(cell.get("text", ""))
+        position_match = _POSITION.search(text)
+        if position_match is None:
+            continue
+        position = position_match["position"].upper()
+        if position not in {"K", "DEF"}:
+            continue
+        normalized_text = normalize_name(text)
+        matches = [
+            name
+            for name in specialists.get(position, ())
+            if normalize_name(name) in normalized_text
+            or _sleeper_abbreviation(name) in normalized_text
+        ]
+        if len(matches) == 1:
+            drafted.add(matches[0])
+    return drafted
+
+
 def _recent_pick_positions(cells: Sequence[Mapping[str, Any]], window: int = 12) -> tuple[str, ...]:
     """Read draft-cell positions in chronological pick order for run analysis."""
 
@@ -616,7 +812,27 @@ def _roster_positions(
 def _row_actions(rows: Sequence[Mapping[str, Any]], board: Board) -> dict[str, frozenset[PlayerRowAction]]:
     actions: dict[str, frozenset[PlayerRowAction]] = {}
     for row in rows:
-        if (name := _resolve_board_player(str(row.get("text", "")), board)) is None:
+        text = str(row.get("text", ""))
+        name = _resolve_board_player(text, board)
+        if name is None:
+            # K/DST candidates deliberately do not live in the analyst
+            # board: their order comes only from Sleeper's rendered
+            # specialist filter in R17/R18.  Retain their literal visible
+            # identity here so the browser safety boundary can prove that
+            # *this exact row* has a DRAFT control before transport clicks
+            # it.  Other unknown player rows remain excluded.
+            positions = tuple(
+                position
+                for position in ("K", "DEF")
+                if _visible_specialist_names(({"text": text},), position)
+            )
+            if len(positions) != 1:
+                continue
+            names = _visible_specialist_names(({"text": text},), positions[0])
+            if len(names) != 1:
+                continue
+            name = names[0]
+        if not name:
             continue
         visible_actions: set[PlayerRowAction] = set()
         if bool(row.get("hasDraftButton")):
@@ -660,16 +876,44 @@ def _market_metrics(rows: Sequence[Mapping[str, Any]], board: Board) -> tuple[di
 
 def _resolve_board_player(text: str, board: Board) -> str | None:
     normalized_text = normalize_name(text)
-    exact: list[str] = []
+    # Include every platform-facing board alias in the initial exact-text
+    # lookup.  A later canonical comparison is too late: if Sleeper calls a
+    # player ``Jonathon`` and the board calls him ``Jonathan``, the old
+    # resolver returned None before identity reconciliation could run.
+    exact = {
+        player.name
+        for platform_name, player in board.by_normalized_name.items()
+        if platform_name and platform_name in normalized_text
+    }
     abbreviated: list[str] = []
     for player in board.players:
         normalized_player = normalize_name(player.name)
         if normalized_player and normalized_player in normalized_text:
-            exact.append(player.name)
+            exact.add(player.name)
             continue
         if _sleeper_abbreviation(player.name) in normalized_text:
             abbreviated.append(player.name)
-    candidates = exact or abbreviated
+    candidates = sorted(exact) if exact else abbreviated
+    if not candidates:
+        # Sleeper truncates long drafted-cell labels (for example
+        # ``J. Smith-N...``).  Treat the visible pre-ellipsis text as a fuzzy
+        # VLOOKUP key only when it matches exactly one board abbreviation.  A
+        # short/common label, missing ellipsis, or position ambiguity remains
+        # unresolved rather than being guessed.
+        prefixes = tuple(
+            normalize_name(line.split("...", maxsplit=1)[0].split("…", maxsplit=1)[0])
+            for line in text.splitlines()
+            if "..." in line or "…" in line
+        )
+        fuzzy = [
+            player.name
+            for player in board.players
+            if any(
+                len(prefix) >= 5 and _sleeper_abbreviation(player.name).startswith(prefix)
+                for prefix in prefixes
+            )
+        ]
+        candidates = fuzzy
     if len(candidates) > 1 and (position := _POSITION.search(text)) is not None:
         candidates = [
             name
@@ -690,12 +934,24 @@ def _sleeper_abbreviation(player_name: str) -> str:
     parts = re.findall(r"[a-z0-9]+", player_name.casefold())
     if len(parts) < 2:
         return ""
+    # Sleeper keeps every component of a hyphenated family name in its
+    # abbreviated cells (``J. Smith-N...``).  ``re.findall`` above separates
+    # those components, so preserve the final hyphenated word as one family
+    # unit before applying the ordinary particle logic below.
+    raw_words = player_name.casefold().split()
+    if raw_words and "-" in raw_words[-1]:
+        family = " ".join(re.findall(r"[a-z0-9]+", raw_words[-1]))
+        return normalize_name(f"{parts[0][0]} {family}")
     suffixes = {"jr", "sr", "ii", "iii", "iv"}
     family_end = len(parts) - 1
     while family_end > 0 and parts[family_end] in suffixes:
         family_end -= 1
     family_start = family_end
-    if family_start > 0 and parts[family_start - 1] in {"st", "van", "von", "de", "del", "la", "le"}:
+    # A particle immediately after the first token can be part of a compound
+    # given name (for example ``De'Von Achane``), not the family name. Keep
+    # particles only when at least two given-name tokens precede them, as in
+    # ``Amon-Ra St. Brown``.
+    if family_start > 2 and parts[family_start - 1] in {"st", "van", "von", "de", "del", "la", "le"}:
         family_start -= 1
     return normalize_name(f"{parts[0][0]} {' '.join(parts[family_start:family_end + 1])}")
 
@@ -717,6 +973,12 @@ def _next_our_pick(current_pick_number: int, target: SleeperBrowserTarget) -> in
 
 _DOM_SNAPSHOT_SCRIPT = f"""() => {{
   const text = (node) => (node && node.innerText ? node.innerText : '').trim();
+  const isVisible = (node) => {{
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return rect.width > 1 && rect.height > 1 && style.display !== 'none' &&
+      style.visibility !== 'hidden' && Number(style.opacity || '1') > 0;
+  }};
   const rows = Array.from(document.querySelectorAll('{_PLAYER_ROW}')).map((row) => ({{
     text: text(row),
     hasDraftButton: Boolean(row.querySelector('{_DRAFT_BUTTON}')),
@@ -728,11 +990,15 @@ _DOM_SNAPSHOT_SCRIPT = f"""() => {{
     text: text(cell),
     classes: Array.from(cell.classList),
   }}));
+  const playerCardOpen = Array.from(document.querySelectorAll('[role=dialog], [class*=modal], [class*=drawer]'))
+    .filter(isVisible)
+    .some((overlay) => /GAME LOGS|PLAYER RANKINGS|LATEST NEWS/.test(text(overlay)));
   return {{
     url: window.location.href,
     bodyText: text(document.body),
     draftCells,
     playerRows: rows,
+    playerCardOpen,
     // Cookie providers can leave a zero-sized, "visible" role=dialog in the
     // DOM after the user has dismissed the banner.  It is not an interaction
     // blocker.  Only report dialogs that have an on-screen rendering box;
@@ -753,3 +1019,32 @@ _DOM_SNAPSHOT_SCRIPT = f"""() => {{
       .map(text),
   }};
 }}"""
+
+
+_SELECT_POSITION_FILTER_SCRIPT = """(position) => {
+  const wanted = String(position || '').trim().toUpperCase();
+  if (!['K', 'DEF'].includes(wanted)) return false;
+  const normalizedText = (node) => (node && node.innerText ? node.innerText : '')
+    .replace(/\\s+/g, ' ').trim().toUpperCase();
+  const isVisible = (node) => {
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return rect.width > 1 && rect.height > 1 && style.display !== 'none' &&
+      style.visibility !== 'hidden' && Number(style.opacity || '1') > 0;
+  };
+  const chipText = new RegExp('^' + wanted + '(?: 0/1)?$');
+  const controls = new Set();
+  for (const node of Array.from(document.querySelectorAll('button, [role="button"], [class*="filter" i], [class*="position" i]'))) {
+    if (!isVisible(node) || !chipText.test(normalizedText(node))) continue;
+    const control = node.closest('button, [role="button"], [class*="filter" i], [class*="position" i]') || node;
+    if (isVisible(control) && chipText.test(normalizedText(control))) controls.add(control);
+  }
+  const candidates = Array.from(controls).sort((left, right) => {
+    const a = left.getBoundingClientRect();
+    const b = right.getBoundingClientRect();
+    return (a.width * a.height) - (b.width * b.height);
+  });
+  if (candidates.length !== 1) return false;
+  candidates[0].click();
+  return true;
+}"""

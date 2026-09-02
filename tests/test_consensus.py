@@ -18,6 +18,11 @@ class ConsensusModelTests(unittest.TestCase):
         result = ConsensusModel().score("WR", AnalystRanks(10, 11, 9, 60, False))
         self.assertEqual(result.label, "GOLD")
 
+    def test_tight_late_round_three_way_agreement_is_still_gold(self):
+        result = ConsensusModel().score("WR", AnalystRanks(48, 47, 49, 60, False))
+        self.assertEqual(result.label, "GOLD")
+        self.assertLess(result.score, .30)
+
     def test_a_single_positive_specialist_is_not_gold(self):
         result = ConsensusModel().score("WR", AnalystRanks(38, 40, 6, 60, True))
         self.assertNotEqual(result.label, "GOLD")
@@ -44,6 +49,35 @@ class ConsensusModelTests(unittest.TestCase):
         )
         self.assertIsNotNone(consensus)
         self.assertEqual(consensus.label, "GOLD")
+
+    def test_reconciled_wr_order_does_not_double_count_harmon(self):
+        board = load_default_board()
+        records = load_waldman_redraft_csv(Path(r"C:\Users\kenik\Downloads\rankings-preseason-2026-all.csv"))
+        policy = SourceBoardPolicy(waldman_redraft=records)
+        from draft_assistant.models import DraftState
+
+        result = policy.recommend(
+            board,
+            DraftState(
+                league_id="league-1",
+                username="kenikh",
+                draft_status="drafting",
+                round_number=3,
+                pick_label="3.05",
+                current_pick_number=29,
+                our_pick_number=29,
+                roster_positions=("QB", "RB"),
+                available_players=frozenset(
+                    {"Tee Higgins", "Nico Collins", "George Pickens", "Chris Olave"}
+                ),
+            ),
+            limit=4,
+        )
+
+        names = [candidate.player.name for candidate in result.candidates]
+        self.assertLess(names.index("Nico Collins"), names.index("Tee Higgins"))
+        self.assertLess(names.index("George Pickens"), names.index("Tee Higgins"))
+        self.assertLess(names.index("Chris Olave"), names.index("Tee Higgins"))
 
 
 if __name__ == "__main__":

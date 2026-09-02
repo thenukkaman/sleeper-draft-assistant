@@ -26,6 +26,7 @@ from .live_driver import ClockFirstDraftDriver
 from .persistent_runner import JsonlPickTelemetrySink, JsonlRunnerJournal, PersistentDraftRunner
 from .policies.sleeper_special_teams import SleeperRankedSpecialTeamsPolicy
 from .policies.source_board import SourceBoardPolicy
+from .research import load_waldman_redraft_csv
 from .stress import MockTelemetry, read_pick_telemetry_jsonl, write_mock_telemetry
 
 
@@ -41,6 +42,14 @@ def main() -> int:
     parser.add_argument("--username", required=True)
     parser.add_argument("--draft-slot", type=int, required=True)
     parser.add_argument("--runtime-dir", type=Path, default=Path("runtime"))
+    parser.add_argument(
+        "--waldman-redraft-csv",
+        type=Path,
+        help=(
+            "Local-only Waldman preseason redraft CSV. It is read at launch "
+            "and never copied into runtime artifacts or sent to Sleeper."
+        ),
+    )
     parser.add_argument(
         "--visual-audit",
         action="store_true",
@@ -69,6 +78,11 @@ def main() -> int:
         draft_slot=args.draft_slot,
     )
     board = load_default_board()
+    waldman_redraft = (
+        load_waldman_redraft_csv(args.waldman_redraft_csv)
+        if args.waldman_redraft_csv is not None
+        else {}
+    )
     run_directory = args.runtime_dir / _utc_now().strftime("%Y%m%dT%H%M%SZ")
     run_directory.mkdir(parents=True, exist_ok=False)
     visual_audit_dir = run_directory / "visual" if args.visual_audit else None
@@ -83,7 +97,7 @@ def main() -> int:
         )
     )
     try:
-        policy = SleeperRankedSpecialTeamsPolicy(SourceBoardPolicy())
+        policy = SleeperRankedSpecialTeamsPolicy(SourceBoardPolicy(waldman_redraft=waldman_redraft))
         driver = ClockFirstDraftDriver(
             board,
             policy,

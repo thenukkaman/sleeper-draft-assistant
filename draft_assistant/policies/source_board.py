@@ -14,7 +14,7 @@ from ..research import WaldmanRedraftRecord
 class SourceBoardPolicy:
     """Strictly applies the player board and stated Superflex constraints."""
 
-    name = "source-board-2026-superflex-v1"
+    name = "source-board-2026-superflex-value-first-v2"
 
     def __init__(
         self,
@@ -41,79 +41,6 @@ class SourceBoardPolicy:
         available = self._eligible(board, state)
         warnings = self._warnings(board, state, counts)
 
-        if state.round_number == 1 and counts["QB"] == 0:
-            names = ["Josh Allen", "Lamar Jackson", "Drake Maye", "Jayden Daniels", "Jalen Hurts"]
-            forced = self._named(available, names, "QB1 at 1.05 is mandatory in this Superflex build.")
-            if forced:
-                return self._result(forced, "QB1 mandate: take the first available elite QB.", warnings, limit)
-            fallback = self._named(available, ["Brock Bowers", "Jahmyr Gibbs", "Bijan Robinson"], "All five elite QBs are gone; use the approved fallback order.")
-            return self._result(fallback, "Elite-QB fallback order from the proxy sheet.", warnings, limit)
-
-        qbs = sorted((player for player in available if player.position == "QB"), key=lambda player: player.rank)
-        viable_qb2 = [player for player in qbs if player.rank <= 10]
-        if counts["QB"] < 2 and state.round_number == 2 and viable_qb2:
-            return self._result(
-                self._as_candidates(viable_qb2, "QB2 before the TEP/RB/WR pivot."),
-                "QB2 priority at 2.08: use the viable source tier before any non-QB.",
-                warnings,
-                limit,
-            )
-        if counts["QB"] < 2 and state.round_number <= 3:
-            return self._result(
-                self._as_candidates(qbs, "QB2 hard deadline at 3.05."),
-                "QB2 hard deadline: draft the highest eligible QB; an AVOID QB is a discounted fallback only.",
-                warnings,
-                limit,
-            )
-        if counts["QB"] < 2:
-            return self._result(
-                self._as_candidates(qbs, "Two-QB Superflex core is still incomplete."),
-                "Repair the incomplete Superflex QB core before other positions.",
-                warnings,
-                limit,
-            )
-
-        # Two RB starters are mandatory.  This is deliberately a hard roster
-        # constraint, not a soft score bonus: after QB2, RB1 must be secured by
-        # the Round-3 pick and RB2 by the Round-4 pick.  In particular, QB3,
-        # TEP, tags, and late-round UPSIDE preference may not postpone RB2.
-        rbs = sorted((player for player in available if player.position == "RB"), key=lambda player: player.rank)
-        rb_required = (counts["RB"] == 0 and state.round_number >= 3) or (
-            counts["RB"] < 2 and state.round_number >= 4
-        )
-        if rb_required and rbs:
-            required_slot = "RB1" if counts["RB"] == 0 else "RB2"
-            # A required position does not erase the user's AVOID price rule.
-            # Take the best ordinary/target/upside RB first; use an AVOID RB
-            # only when no other RB remains.
-            non_avoid_rbs = [player for player in rbs if player.tag != Tag.AVOID]
-            return self._result(
-                self._as_candidates(
-                    non_avoid_rbs + [player for player in rbs if player.tag == Tag.AVOID] or rbs,
-                    f"{required_slot} is a mandatory starting-roster requirement.",
-                ),
-                f"Draft {required_slot} now: this league requires two starting RBs before QB3 or optional upside.",
-                warnings,
-                limit,
-            )
-
-        if counts["QB"] < 3 and 7 <= state.round_number <= 9:
-            qb3 = [player for player in qbs if player.rank <= 20]
-            if qb3:
-                return self._result(
-                    self._as_candidates(qb3, "Viable QB3 value in the R7-R9 window."),
-                    "QB3 value window: a viable third QB beats a bench RB/WR swing here.",
-                    warnings,
-                    limit,
-                )
-        if counts["QB"] < 3 and state.round_number >= 10:
-            return self._result(
-                self._as_candidates(qbs, "QB3 is still missing; never take a fourth QB."),
-                "Finish the three-QB build before adding more bench depth.",
-                warnings,
-                limit,
-            )
-
         if state.round_number == 17 and counts["DEF"] < 1:
             return Recommendation(
                 policy_name=self.name,
@@ -132,7 +59,10 @@ class SourceBoardPolicy:
             )
 
         ranked = self._score_flex_candidates(board, available, state, counts)
-        directive = board.pick_plan.get(state.pick_label, "Take the highest remaining eligible source-board value.")
+        directive = (
+            "Value first: take the highest remaining modeled value. "
+            "Starter coverage receives increasing pressure as roster flexibility disappears, but no ordinary round forces a position."
+        )
         return self._result(ranked, directive, warnings, limit)
 
     @staticmethod
@@ -181,7 +111,11 @@ class SourceBoardPolicy:
         for player in available:
             if player.position == "QB" and counts["QB"] >= 3:
                 continue
-            score = 500.0 - player.rank * 3.0
+            analyst_score, consensus = self._analyst_score(board, player)
+            # The analyst model is the actual baseline, rather than a label
+            # pasted onto JJ's inherited order. Live VBD, roster needs, and
+            # market price then settle cross-position decisions.
+            score = analyst_score * 240.0
             target = state.round_number >= 4
             tag_price = self.value_model.tag_price(player, state)
             score += tag_price.adjustment
@@ -197,21 +131,26 @@ class SourceBoardPolicy:
             harmon = board.harmon_wr_adjustment(player.name)
             rookie_harmon = board.harmon_rookie_wr_adjustment(player.name)
             harmon_adjustment = self.value_model.harmon_wr_adjustment(player, harmon)
-            score += harmon_adjustment
+            # Harmon is already a weighted input to ``_analyst_score``.
+            # Applying a second raw "slots × points" bump here lets one
+            # analyst leap a clear JJ/Waldman tier, which contradicts the
+            # Venn model.  Retain the delta below as human-readable context,
+            # but score it exactly once through the normalized consensus.
             rookie_adjustment = self.value_model.harmon_rookie_adjustment(rookie_harmon)
             score += rookie_adjustment
             conviction = self.value_model.is_waldman_harmon_conviction(player, rsp, harmon, rookie_harmon)
-            triple_conviction = self.value_model.is_triple_conviction(player, rsp, harmon, rookie_harmon)
-            consensus = self._consensus(board, player, harmon)
+            triple_conviction = self.value_model.is_triple_conviction(player, rsp, harmon, rookie_harmon) or (
+                board.source_tag(player.name) in {Tag.TARGET, Tag.UPSIDE}
+                and self.value_model.is_waldman_harmon_conviction(player, rsp, harmon, rookie_harmon)
+            )
             if consensus is not None:
-                # The baseline source rank already determines most of the
-                # score. Consensus moves close calls, and only tight genuine
-                # agreement earns its separate label bonus.
-                score += (consensus.score - 0.5) * 30.0
+                # Tight agreement is a confidence signal on top of the
+                # weighted rank. It never replaces an explicit personal gate
+                # or promotes a low-ranked late player to an early pick.
                 if consensus.label == "GOLD":
-                    score += 38.0
+                    score += 38.0 if consensus.score >= 0.60 else 8.0
                 elif consensus.label == "STRONG":
-                    score += 20.0
+                    score += 20.0 if consensus.score >= 0.55 else 5.0
             if state.round_number >= 4:
                 score += (
                     self.value_model.waldman_jj_harmon_conviction_bonus
@@ -220,17 +159,22 @@ class SourceBoardPolicy:
                 )
             if state.round_number >= 4 and rsp:
                 score += float(rsp["points"])
-            score += max(0, 2 - counts[player.position]) * 8.0
-            score += max(0, 1 - counts[player.position]) * 8.0
-            if player.position in {"RB", "WR"} and state.round_number <= 6 and counts[player.position] < 2:
-                score += 16.0
+            score += self._roster_coverage_urgency(player, counts, state)
             if player.position == "TE" and player.name == "Brock Bowers" and state.round_number <= 3:
                 score += 65.0
-            if player.position == "TE" and counts["TE"] < 1 and state.round_number <= 8:
-                score += 10.0
             reason = self._flex_reason(player, state, counts)
             if player.tag in {Tag.TARGET, Tag.AVOID}:
                 reason += " " + tag_price.summary
+            source_tag = board.source_tag(player.name)
+            preference = board.preference_adjustment(player.name)
+            if preference is not None:
+                direction = "above" if preference["slots"] > 0 else "below"
+                reason += (
+                    f" Personal {preference['label']}: {abs(preference['slots'])} spots "
+                    f"{direction} consensus."
+                )
+            if source_tag != Tag.NONE:
+                reason += f" JJ qualitative signal: {source_tag.value}."
             if vbd is not None:
                 reason += f" VBD: +{vbd:.1f} projected points over {player.position} replacement."
             if harmon is not None:
@@ -267,6 +211,99 @@ class SourceBoardPolicy:
             )
         return sorted(candidates, key=lambda candidate: (-candidate.score, candidate.player.rank, candidate.player.name))
 
+    @staticmethod
+    def _roster_coverage_urgency(player: Player, counts: Counter[str], state: DraftState) -> float:
+        """Price roster coverage without round-by-round position mandates.
+
+        Missing starters get a graduated premium. It becomes a hard safety
+        edge only if skipping the position would make the starting core
+        mathematically impossible to finish with the remaining own picks.
+        """
+
+        # The lineup has five fixed offensive starters (QB/RB/RB/WR/WR/TE),
+        # one W/R/T FLEX, and one Superflex.  QB2 is therefore valuable in
+        # this format, but is *not* a mandatory starter: a second RB, WR, or
+        # TE may validly occupy the Superflex.  DST is never flex-eligible.
+        starters = {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+        depth_targets = {"QB": 2, "RB": 5, "WR": 6, "TE": 2}
+        # QB1 carries a meaningful Superflex scarcity premium. QB2 itself is
+        # still an optional Superflex value choice, not roster obligation.
+        starter_weight = {"QB": 82.0, "RB": 24.0, "WR": 18.0, "TE": 10.0}
+        position = player.position
+        if position not in starters:
+            return 0.0
+        # Before buying a luxury QB3 or TE3, finish the playable weekly core:
+        # RB2/WR2 starters plus one bench back and receiver.  This is a
+        # construction constraint, not a round script; it stops TEP/value
+        # enthusiasm from creating a five-TE roster while RB/WR are thin.
+        rb_wr_depth_missing = counts["RB"] < 3 or counts["WR"] < 3
+        luxury_position = (
+            (position == "QB" and counts["QB"] >= 2)
+            or (position == "TE" and counts["TE"] >= 2)
+        )
+        if luxury_position and rb_wr_depth_missing:
+            return -10_000.0
+        # TE2 remains a normal TEP/value decision. TE3+ is allowed only when
+        # its modeled edge can overcome a meaningful opportunity-cost charge.
+        if position == "TE" and counts["TE"] >= 2:
+            return -60.0
+        if state.round_number >= 4 and position in {"RB", "WR"} and counts[position] < 3:
+            return 110.0 if counts[position] < starters[position] else 70.0
+        missing = max(0, starters[position] - counts[position])
+        total_missing = sum(max(0, target - counts[key]) for key, target in starters.items())
+        picks_made = len(state.roster_positions)
+        picks_remaining_after_this = max(0, 17 - picks_made)
+        missing_after_this = total_missing - (1 if missing else 0)
+        if missing and picks_remaining_after_this < missing_after_this:
+            return 10_000.0
+        if missing:
+            time_pressure = max(0, state.round_number - 1) * (starter_weight[position] / 6.0)
+            return missing * starter_weight[position] + time_pressure
+        return 5.0 if counts[position] < depth_targets[position] else 0.0
+
+    def _ranked_by_analyst(self, board: Board, players):
+        """Position order from the weighted Venn model, stable on ties."""
+
+        return sorted(
+            players,
+            key=lambda player: (-self._analyst_score(board, player)[0], player.rank, player.name),
+        )
+
+    def _analyst_score(self, board: Board, player: Player) -> tuple[float, object | None]:
+        """Return a comparable 0–1 analyst score and its consensus evidence.
+
+        The original JJ rank is always present. Waldman and Harmon are added
+        at their declared weights when they made a positional call. JJ's
+        original tag is retained as a small qualitative adjustment, not an
+        instruction that can overrule the multi-source order.
+        """
+
+        consensus = self._consensus(board, player, board.harmon_wr_adjustment(player.name))
+        pool = sum(1 for candidate in board.players if candidate.position == player.position)
+        jj_anchor = self.consensus_model._value(player.rank, pool)
+        base = consensus.score if consensus is not None else jj_anchor
+        # Reconciliation can settle a close tier but may not leap a clear JJ
+        # source-rank tier on an ordinary signal.  Only GOLD three-source
+        # alignment can exceed this bounded six-slot overlay.
+        if consensus is not None and consensus.label != "GOLD":
+            base = min(base, jj_anchor + (6.0 / pool))
+        source_adjustment = {
+            Tag.TARGET: 0.018,
+            Tag.UPSIDE: 0.009,
+            Tag.AVOID: -0.018,
+            Tag.CHECK_NEWS: 0.0,
+            Tag.NONE: 0.0,
+        }[board.source_tag(player.name)]
+        preference = board.preference_adjustment(player.name)
+        # This converts the user's stated rank move into the same 0--1
+        # positional scale as consensus.  It is deliberately applied after
+        # analyst reconciliation: SHADE/GLAZE alters the final draft order,
+        # never the underlying JJ/Waldman/Harmon evidence.
+        preference_adjustment = (
+            float(preference["slots"]) / pool if preference is not None else 0.0
+        )
+        return max(0.0, min(1.0, base + source_adjustment + preference_adjustment)), consensus
+
     def _consensus(self, board: Board, player: Player, harmon: dict[str, int] | None):
         record = self.waldman_redraft.get(normalize_name(player.name))
         if record is None:
@@ -293,15 +330,16 @@ class SourceBoardPolicy:
             return "Source UPSIDE is preferred over floor after Round 3."
         if player.tag == Tag.AVOID:
             return "AVOID: only draft after its explicit market-clearance requirement is met."
-        if counts[player.position] < 2:
-            return f"Build the starting {player.position} core before deeper bench value."
+        required_starters = {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+        if counts[player.position] < required_starters.get(player.position, 0):
+            return f"Build the required {player.position} starting core before deeper bench value."
         return "Highest remaining eligible source-board value."
 
     @staticmethod
     def _warnings(board: Board, state: DraftState, counts: Counter[str]) -> tuple[str, ...]:
         warnings: list[str] = []
         if state.round_number >= 4 and counts["QB"] < 2:
-            warnings.append("QB2 deadline was missed; QB is now forced until repaired.")
+            warnings.append("QB2 remains an open Superflex option; take it only when its value clears RB/WR alternatives.")
         if counts["QB"] >= 3:
             warnings.append("Three-QB target reached: QB4 is forbidden by this policy.")
         if state.pick_label not in board.pick_plan:

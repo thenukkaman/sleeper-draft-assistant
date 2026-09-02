@@ -201,7 +201,8 @@ class PersistentDraftRunner:
                 None,
                 recommendation,
                 gate,
-                f"Draft action path raised {type(error).__name__}; monitor this clock but do not retry a player action.",
+                f"Draft action path raised {type(error).__name__}: {error}; "
+                "monitor this clock but do not retry a player action.",
                 final_observation=final_observation,
                 quarantined=True,
             )
