@@ -30,6 +30,7 @@ class PickTelemetry:
     auto_pick_before: bool | None
     auto_pick_after: bool | None
     outcome: str
+    auto_pick_recovery: str = "not_needed"
     reason: str = ""
     observed_candidates: tuple[str, ...] = ()
 
@@ -98,6 +99,7 @@ def read_mock_telemetry(path: Path) -> MockTelemetry:
                 current_pick_number=int(pick["current_pick_number"]),
                 auto_pick_before=pick.get("auto_pick_before"),
                 auto_pick_after=pick.get("auto_pick_after"),
+                auto_pick_recovery=str(pick.get("auto_pick_recovery", "not_recorded")),
                 outcome=str(pick["outcome"]),
                 reason=str(pick.get("reason", "")),
                 observed_candidates=tuple(pick.get("observed_candidates", ())),
@@ -128,6 +130,10 @@ def summarize(mocks: Iterable[MockTelemetry]) -> dict[str, Any]:
         "auto_pick_incidents": sum(
             pick.auto_pick_before is True or pick.auto_pick_after is True for pick in picks
         ),
+        "auto_pick_recoveries": sum(pick.auto_pick_recovery == "recovered" for pick in picks),
+        "auto_pick_recovery_failures": sum(
+            pick.auto_pick_recovery in {"failed", "missed_before_recovery"} for pick in picks
+        ),
         "selection_latency_ms": _latency_summary(selection_latencies),
         "confirmation_latency_ms": _latency_summary(confirmation_latencies),
         "outcomes": dict(sorted(outcomes.items())),
@@ -139,6 +145,7 @@ def summarize(mocks: Iterable[MockTelemetry]) -> dict[str, Any]:
                 "reason": pick.reason,
                 "auto_pick_before": pick.auto_pick_before,
                 "auto_pick_after": pick.auto_pick_after,
+                "auto_pick_recovery": pick.auto_pick_recovery,
             }
             for run in runs
             for pick in run.picks

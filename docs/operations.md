@@ -65,3 +65,14 @@ those records. The run is a pass only if:
 The post-mortem must list every exception with its raw reason, not merely an
 aggregate count. A later approval threshold can be made stricter once enough
 latency data exists.
+
+## Auto-pick incident response
+
+Auto-pick is a high-priority recovery path, not a terminal no-op. On every
+poll, the runner must verify that it is off. If it is on, the executor must
+disable the exact Sleeper toggle, re-observe the state, and only resume the
+selection flow if the same live pick remains. If the clock advanced during that
+operation, the pick is already lost: record the player, timestamps, before and
+after auto-pick states, and reason; do not issue a duplicate selection. A
+failed toggle or unknown state is fail-closed and must immediately be surfaced
+as a runner failure.

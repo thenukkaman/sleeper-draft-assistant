@@ -264,6 +264,108 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertEqual(room.picks, ["Josh Allen"])
         self.assertIn("do not retry", attempt.reason)
 
+    def test_clock_driver_disables_auto_pick_then_salvages_the_live_pick(self) -> None:
+        class Room:
+            def __init__(self, observation):
+                self.observation = observation
+                self.auto_pick_changes = []
+                self.picks = []
+
+            def observe(self):
+                return self.observation
+
+            def set_auto_pick(self, enabled):
+                self.auto_pick_changes.append(enabled)
+                self.observation = replace(self.observation, auto_pick_enabled=enabled)
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+                self.observation = replace(
+                    self.observation,
+                    drafted_players=self.observation.drafted_players | frozenset({player_name}),
+                    current_pick_number=self.observation.current_pick_number + 1,
+                )
+
+        room = Room(
+            BrowserObservation(
+                league_id="league-1",
+                username="kenikh",
+                draft_status="drafting",
+                auto_pick_enabled=True,
+                round_number=1,
+                pick_label="1.05",
+                current_pick_number=5,
+                our_pick_number=5,
+                roster_positions=(),
+                drafted_players=frozenset(),
+                available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+            )
+        )
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(room)
+
+        self.assertTrue(attempt.acted)
+        self.assertTrue(attempt.confirmed)
+        self.assertEqual(room.auto_pick_changes, [False])
+        self.assertEqual(room.picks, ["Josh Allen"])
+        self.assertIsNotNone(attempt.auto_pick_recovery)
+        self.assertTrue(attempt.auto_pick_recovery.recovered)
+        self.assertFalse(attempt.auto_pick_recovery.pick_was_missed)
+
+    def test_clock_driver_records_a_pick_already_lost_to_auto_pick(self) -> None:
+        class Room:
+            def __init__(self, observation):
+                self.observation = observation
+                self.picks = []
+
+            def observe(self):
+                return self.observation
+
+            def set_auto_pick(self, enabled):
+                self.observation = replace(
+                    self.observation,
+                    auto_pick_enabled=enabled,
+                    current_pick_number=self.observation.current_pick_number + 1,
+                    drafted_players=self.observation.drafted_players | frozenset({"Lamar Jackson"}),
+                )
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+
+        room = Room(
+            BrowserObservation(
+                league_id="league-1",
+                username="kenikh",
+                draft_status="drafting",
+                auto_pick_enabled=True,
+                round_number=1,
+                pick_label="1.05",
+                current_pick_number=5,
+                our_pick_number=5,
+                roster_positions=(),
+                drafted_players=frozenset(),
+                available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+            )
+        )
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(room)
+
+        self.assertFalse(attempt.acted)
+        self.assertFalse(attempt.confirmed)
+        self.assertEqual(room.picks, [])
+        self.assertIsNotNone(attempt.auto_pick_recovery)
+        self.assertTrue(attempt.auto_pick_recovery.recovered)
+        self.assertTrue(attempt.auto_pick_recovery.pick_was_missed)
+        self.assertIn("already advanced", attempt.reason)
+
     def test_visible_draftboard_refreshes_roster_taken_players_and_clock(self) -> None:
         snapshot = '''
 - heading "kenikh" [level=1]

@@ -21,6 +21,7 @@ class StressTelemetryTests(unittest.TestCase):
             current_pick_number=5,
             auto_pick_before=False,
             auto_pick_after=False,
+            auto_pick_recovery="not_needed",
             outcome="confirmed",
         )
         missed = PickTelemetry(
@@ -33,6 +34,7 @@ class StressTelemetryTests(unittest.TestCase):
             current_pick_number=20,
             auto_pick_before=False,
             auto_pick_after=True,
+            auto_pick_recovery="missed_before_recovery",
             outcome="missed",
             reason="Clock advanced before the runner submitted an action.",
         )
@@ -54,6 +56,7 @@ class StressTelemetryTests(unittest.TestCase):
         self.assertEqual(report["picks_confirmed"], 1)
         self.assertEqual(report["picks_missed"], 1)
         self.assertEqual(report["auto_pick_incidents"], 1)
+        self.assertEqual(report["auto_pick_recovery_failures"], 1)
         self.assertEqual(report["selection_latency_ms"]["median"], 300)
         self.assertEqual(report["confirmation_latency_ms"]["p95"], 700)
         self.assertEqual(report["failures"][0]["pick_label"], "2.08")

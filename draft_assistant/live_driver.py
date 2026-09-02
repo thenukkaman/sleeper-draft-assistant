@@ -28,6 +28,28 @@ class DraftRoom(Protocol):
     def draft(self, player_name: str) -> None: ...
 
 
+class AutoPickControllableDraftRoom(DraftRoom, Protocol):
+    """Optional capability for a room that can explicitly disable auto-pick."""
+
+    def set_auto_pick(self, enabled: bool) -> None: ...
+
+
+@dataclass(frozen=True)
+class AutoPickRecovery:
+    """Evidence from a single auto-pick remediation attempt.
+
+    A recovered toggle is not the same as a recovered pick: Sleeper may already
+    have advanced the clock while the UI was being updated.
+    """
+
+    attempted: bool
+    recovered: bool
+    pick_was_missed: bool
+    before_pick_number: int | None
+    after_pick_number: int | None
+    reason: str
+
+
 @dataclass(frozen=True)
 class DraftAttempt:
     acted: bool
@@ -36,6 +58,7 @@ class DraftAttempt:
     recommendation: Recommendation
     gate: ExecutionGate
     reason: str
+    auto_pick_recovery: AutoPickRecovery | None = None
 
 
 class ClockFirstDraftDriver:
@@ -48,22 +71,72 @@ class ClockFirstDraftDriver:
 
     def run_once(self, room: DraftRoom) -> DraftAttempt:
         first = room.observe()
+        recovery = self._recover_auto_pick(room, first)
+        if recovery is not None:
+            if not recovery.recovered or recovery.pick_was_missed:
+                state = room.observe().to_state()
+                recommendation = self.policy.recommend(self.board, state)
+                gate = self.guard.evaluate(state, recommendation)
+                return DraftAttempt(
+                    False,
+                    False,
+                    None,
+                    recommendation,
+                    gate,
+                    recovery.reason,
+                    recovery,
+                )
+            first = room.observe()
         recommendation = self.policy.recommend(self.board, first.to_state())
         gate = self.guard.evaluate(first.to_state(), recommendation)
         if not gate.allowed:
-            return DraftAttempt(False, False, None, recommendation, gate, "Initial clock/identity gate blocked action.")
+            return DraftAttempt(
+                False,
+                False,
+                None,
+                recommendation,
+                gate,
+                "Initial clock/identity gate blocked action.",
+                recovery,
+            )
 
         # The UI may change in the milliseconds between recommendation and click.
         commit = room.observe()
+        commit_recovery = self._recover_auto_pick(room, commit)
+        if commit_recovery is not None:
+            recovery = commit_recovery
+            if not recovery.recovered or recovery.pick_was_missed:
+                state = room.observe().to_state()
+                recommendation = self.policy.recommend(self.board, state)
+                gate = self.guard.evaluate(state, recommendation)
+                return DraftAttempt(False, False, None, recommendation, gate, recovery.reason, recovery)
+            commit = room.observe()
+            recommendation = self.policy.recommend(self.board, commit.to_state())
         commit_gate = self.guard.evaluate(commit.to_state(), recommendation)
         if not commit_gate.allowed:
-            return DraftAttempt(False, False, None, recommendation, commit_gate, "Draft state changed before commit.")
+            return DraftAttempt(
+                False,
+                False,
+                None,
+                recommendation,
+                commit_gate,
+                "Draft state changed before commit.",
+                recovery,
+            )
         if (commit.pick_label, commit.current_pick_number) != (first.pick_label, first.current_pick_number):
-            return DraftAttempt(False, False, None, recommendation, commit_gate, "The clock advanced before commit.")
+            return DraftAttempt(
+                False,
+                False,
+                None,
+                recommendation,
+                commit_gate,
+                "The clock advanced before commit.",
+                recovery,
+            )
 
         primary = recommendation.primary
         if primary is None:
-            return DraftAttempt(False, False, None, recommendation, commit_gate, "No named player was returned.")
+            return DraftAttempt(False, False, None, recommendation, commit_gate, "No named player was returned.", recovery)
         room.draft(primary.player.name)
         published = room.observe()
         recorded = {normalize_name(name) for name in published.drafted_players}
@@ -76,6 +149,7 @@ class ClockFirstDraftDriver:
                 recommendation,
                 commit_gate,
                 "Draft click was submitted but Sleeper did not publish the named player; do not retry automatically.",
+                recovery,
             )
         if published.current_pick_number == commit.current_pick_number:
             return DraftAttempt(
@@ -85,5 +159,59 @@ class ClockFirstDraftDriver:
                 recommendation,
                 commit_gate,
                 "Sleeper recorded the player but the draft clock did not advance; do not retry automatically.",
+                recovery,
             )
-        return DraftAttempt(True, True, primary.player.name, recommendation, commit_gate, "Draft click verified in Sleeper.")
+        return DraftAttempt(
+            True,
+            True,
+            primary.player.name,
+            recommendation,
+            commit_gate,
+            "Draft click verified in Sleeper.",
+            recovery,
+        )
+
+    @staticmethod
+    def _recover_auto_pick(room: DraftRoom, observation: BrowserObservation) -> AutoPickRecovery | None:
+        """Disable auto-pick first, then prove the same pick is still salvageable."""
+
+        if observation.auto_pick_enabled is not True:
+            return None
+        toggle = getattr(room, "set_auto_pick", None)
+        if not callable(toggle):
+            return AutoPickRecovery(
+                attempted=False,
+                recovered=False,
+                pick_was_missed=False,
+                before_pick_number=observation.current_pick_number,
+                after_pick_number=None,
+                reason="Auto-pick is enabled but this draft-room adapter cannot disable it; action is blocked.",
+            )
+        toggle(False)
+        after = room.observe()
+        if after.auto_pick_enabled is not False:
+            return AutoPickRecovery(
+                attempted=True,
+                recovered=False,
+                pick_was_missed=False,
+                before_pick_number=observation.current_pick_number,
+                after_pick_number=after.current_pick_number,
+                reason="Auto-pick remained enabled after the targeted disable action; action is blocked.",
+            )
+        if after.current_pick_number != observation.current_pick_number:
+            return AutoPickRecovery(
+                attempted=True,
+                recovered=True,
+                pick_was_missed=True,
+                before_pick_number=observation.current_pick_number,
+                after_pick_number=after.current_pick_number,
+                reason="Auto-pick was disabled, but Sleeper had already advanced the clock; record the missed pick and do not retry.",
+            )
+        return AutoPickRecovery(
+            attempted=True,
+            recovered=True,
+            pick_was_missed=False,
+            before_pick_number=observation.current_pick_number,
+            after_pick_number=after.current_pick_number,
+            reason="Auto-pick was disabled and the same live pick remains salvageable.",
+        )
