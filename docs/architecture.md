@@ -57,6 +57,16 @@ page exposes `DRAFTROOM`. The runner may use that control only to enter the
 scheduled league room, then waits for Sleeper's active-draft state. It has no
 authority to start the league draft through a mock control.
 
+## Lookahead boundary
+
+After every opponent pick, the runner prepares a complete candidate ladder for
+the next `kenikh` pick using the policy and the latest known roster. At the
+clock it may discard players opponents selected and use that ladder only when
+the target pick label, roster, and known drafted set still match. The final
+browser observation, autonomous gate, exact `DRAFT` control, and Sleeper
+publication check remain mandatory; lookahead reduces deliberation latency but
+never bypasses an execution safeguard.
+
 ## Annual refresh
 
 For a new season, start by replacing `draft_assistant/board.json`. Update

@@ -95,9 +95,35 @@ Do not commit credentials, cookies, browser profiles, or draft transcripts
 that identify accounts. Put any future local runtime state under `runtime/`,
 which is ignored by Git.
 
+## Timing rehearsal before the 25-mock stress test
+
+Do not begin the 25-mock stress test until a persistent browser executor has
+completed a timing rehearsal. The rehearsal must use structured DOM or
+accessibility state, not a screenshot or viewport position, and record a raw
+timestamp for each of these events:
+
+1. poll start and prior completed poll;
+2. first observation that the current pick belongs to `kenikh`, plus Sleeper's
+   displayed countdown and its rounding precision;
+3. recommendation ready, exact `DRAFT` request, and published confirmation;
+4. auto-pick first seen, targeted toggle request, and verified toggle-off;
+   and
+5. the exact player, pick label, candidates, browser state, and outcome.
+
+The countdown produces an *estimated* pick-open timestamp: it is derived from
+the observed remaining time and explicitly retains its one-second display
+precision. Auto-pick detection is likewise an upper bound from the last clear
+poll, never a claimed exact onset time.
+
+The rehearsal passes only when the instrumentation can produce these fields
+for each exercised path: normal pick, rapid opponent advance, an unavailable
+prepared candidate, browser blocker, and auto-pick recovery. Establish the
+observed baseline first; do not set a performance pass/fail threshold from a
+chat-driven manual loop.
+
 ## Stress-test acceptance criteria
 
-Run 25 complete mocks before approving unattended execution. Capture a JSON
+After the timing rehearsal passes, run 25 complete mocks. Capture a JSON
 record for every one of the team's 18 picks, then calculate the report from
 those records. The run is a pass only if:
 
@@ -106,8 +132,12 @@ those records. The run is a pass only if:
 - every submitted pick is confirmed as the expected player (or explicitly
   classified as a policy mismatch);
 - no auto-pick state appears without a recorded detection and remediation;
-- the measured selection and confirmation latencies are comfortably below the
-  two-minute clock, including the slowest observed pick.
+- the measured clock-detection, observation, recommendation, dispatch,
+  selection-to-confirmation, and total clock-to-selection latencies are
+  comfortably below the two-minute clock, including the slowest observed
+  pick; and
+- every auto-pick incident has a bounded detection interval and measured
+  disable/recovery timing, rather than only a narrative note.
 
 The post-mortem must list every exception with its raw reason, not merely an
 aggregate count. A later approval threshold can be made stricter once enough

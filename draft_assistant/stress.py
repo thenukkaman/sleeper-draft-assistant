@@ -9,11 +9,32 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean, median
 from typing import Any, Iterable
 import json
+
+
+@dataclass(frozen=True)
+class TimingEvidence:
+    """Raw clock-edge evidence captured by the persistent browser runner.
+
+    Sleeper exposes a rounded-down countdown, so ``estimated_pick_opened_at``
+    is explicitly an estimate—not an invented server timestamp.  The paired
+    clock precision and prior completed poll make the uncertainty auditable.
+    """
+
+    poll_started_at: datetime | None = None
+    prior_poll_completed_at: datetime | None = None
+    observed_live_at: datetime | None = None
+    browser_clock_remaining_ms: int | None = None
+    browser_clock_precision_ms: int | None = None
+    pick_clock_duration_ms: int = 120_000
+    recommendation_ready_at: datetime | None = None
+    auto_pick_detected_at: datetime | None = None
+    auto_pick_disable_requested_at: datetime | None = None
+    auto_pick_disabled_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +54,7 @@ class PickTelemetry:
     auto_pick_recovery: str = "not_needed"
     reason: str = ""
     observed_candidates: tuple[str, ...] = ()
+    timing: TimingEvidence = field(default_factory=TimingEvidence)
 
     @property
     def selection_latency_ms(self) -> int | None:
@@ -45,6 +67,80 @@ class PickTelemetry:
         if self.confirmed_at is None:
             return None
         return round((self.confirmed_at - self.decision_started_at).total_seconds() * 1_000)
+
+    @property
+    def first_live_observed_at(self) -> datetime:
+        """Use the precise browser timestamp when captured, else legacy data."""
+
+        return self.timing.observed_live_at or self.decision_started_at
+
+    @property
+    def estimated_pick_opened_at(self) -> datetime | None:
+        """Estimate the clock edge from the observed, rounded Sleeper timer."""
+
+        observed_at = self.timing.observed_live_at
+        remaining_ms = self.timing.browser_clock_remaining_ms
+        if observed_at is None or remaining_ms is None:
+            return None
+        elapsed_ms = self.timing.pick_clock_duration_ms - remaining_ms
+        if elapsed_ms < 0:
+            return None
+        return observed_at - timedelta(milliseconds=elapsed_ms)
+
+    @staticmethod
+    def _duration_ms(later: datetime | None, earlier: datetime | None) -> int | None:
+        if later is None or earlier is None:
+            return None
+        return round((later - earlier).total_seconds() * 1_000)
+
+    @property
+    def clock_detection_latency_ms(self) -> int | None:
+        return self._duration_ms(self.first_live_observed_at, self.estimated_pick_opened_at)
+
+    @property
+    def observation_latency_ms(self) -> int | None:
+        return self._duration_ms(self.first_live_observed_at, self.timing.poll_started_at)
+
+    @property
+    def recommendation_latency_ms(self) -> int | None:
+        return self._duration_ms(self.timing.recommendation_ready_at, self.first_live_observed_at)
+
+    @property
+    def dispatch_latency_ms(self) -> int | None:
+        return self._duration_ms(self.selection_requested_at, self.timing.recommendation_ready_at)
+
+    @property
+    def confirmation_after_selection_ms(self) -> int | None:
+        return self._duration_ms(self.confirmed_at, self.selection_requested_at)
+
+    @property
+    def clock_to_selection_ms(self) -> int | None:
+        return self._duration_ms(self.selection_requested_at, self.estimated_pick_opened_at)
+
+    @property
+    def auto_pick_detection_upper_bound_ms(self) -> int | None:
+        """Bound auto-pick detection by the last clear poll, never call it exact."""
+
+        return self._duration_ms(self.timing.auto_pick_detected_at, self.timing.prior_poll_completed_at)
+
+    @property
+    def auto_pick_disable_latency_ms(self) -> int | None:
+        return self._duration_ms(self.timing.auto_pick_disabled_at, self.timing.auto_pick_detected_at)
+
+    @property
+    def auto_pick_disable_request_latency_ms(self) -> int | None:
+        return self._duration_ms(self.timing.auto_pick_disable_requested_at, self.timing.auto_pick_detected_at)
+
+    @property
+    def auto_pick_toggle_verification_latency_ms(self) -> int | None:
+        return self._duration_ms(
+            self.timing.auto_pick_disabled_at,
+            self.timing.auto_pick_disable_requested_at,
+        )
+
+    @property
+    def auto_pick_salvage_latency_ms(self) -> int | None:
+        return self._duration_ms(self.selection_requested_at, self.timing.auto_pick_detected_at)
 
 
 @dataclass(frozen=True)
@@ -103,6 +199,7 @@ def read_mock_telemetry(path: Path) -> MockTelemetry:
                 outcome=str(pick["outcome"]),
                 reason=str(pick.get("reason", "")),
                 observed_candidates=tuple(pick.get("observed_candidates", ())),
+                timing=_read_timing_evidence(pick.get("timing", {})),
             )
             for pick in raw["picks"]
         ),
@@ -134,8 +231,58 @@ def summarize(mocks: Iterable[MockTelemetry]) -> dict[str, Any]:
         "auto_pick_recovery_failures": sum(
             pick.auto_pick_recovery in {"failed", "missed_before_recovery"} for pick in picks
         ),
+        "auto_pick_incidents_missing_timing": sum(
+            (pick.auto_pick_before is True or pick.auto_pick_after is True)
+            and pick.timing.auto_pick_detected_at is None
+            for pick in picks
+        ),
         "selection_latency_ms": _latency_summary(selection_latencies),
         "confirmation_latency_ms": _latency_summary(confirmation_latencies),
+        "clock_detection_latency_ms": _latency_summary(
+            [pick.clock_detection_latency_ms for pick in picks if pick.clock_detection_latency_ms is not None]
+        ),
+        "observation_latency_ms": _latency_summary(
+            [pick.observation_latency_ms for pick in picks if pick.observation_latency_ms is not None]
+        ),
+        "recommendation_latency_ms": _latency_summary(
+            [pick.recommendation_latency_ms for pick in picks if pick.recommendation_latency_ms is not None]
+        ),
+        "dispatch_latency_ms": _latency_summary(
+            [pick.dispatch_latency_ms for pick in picks if pick.dispatch_latency_ms is not None]
+        ),
+        "confirmation_after_selection_ms": _latency_summary(
+            [pick.confirmation_after_selection_ms for pick in picks if pick.confirmation_after_selection_ms is not None]
+        ),
+        "clock_to_selection_ms": _latency_summary(
+            [pick.clock_to_selection_ms for pick in picks if pick.clock_to_selection_ms is not None]
+        ),
+        "auto_pick_detection_upper_bound_ms": _latency_summary(
+            [
+                pick.auto_pick_detection_upper_bound_ms
+                for pick in picks
+                if pick.auto_pick_detection_upper_bound_ms is not None
+            ]
+        ),
+        "auto_pick_disable_latency_ms": _latency_summary(
+            [pick.auto_pick_disable_latency_ms for pick in picks if pick.auto_pick_disable_latency_ms is not None]
+        ),
+        "auto_pick_disable_request_latency_ms": _latency_summary(
+            [
+                pick.auto_pick_disable_request_latency_ms
+                for pick in picks
+                if pick.auto_pick_disable_request_latency_ms is not None
+            ]
+        ),
+        "auto_pick_toggle_verification_latency_ms": _latency_summary(
+            [
+                pick.auto_pick_toggle_verification_latency_ms
+                for pick in picks
+                if pick.auto_pick_toggle_verification_latency_ms is not None
+            ]
+        ),
+        "auto_pick_salvage_latency_ms": _latency_summary(
+            [pick.auto_pick_salvage_latency_ms for pick in picks if pick.auto_pick_salvage_latency_ms is not None]
+        ),
         "outcomes": dict(sorted(outcomes.items())),
         "failures": [
             {
@@ -152,6 +299,29 @@ def summarize(mocks: Iterable[MockTelemetry]) -> dict[str, Any]:
             if pick.outcome not in {"confirmed"}
         ],
     }
+
+
+def _read_timing_evidence(raw: dict[str, Any]) -> TimingEvidence:
+    """Read optional timing fields while preserving older telemetry files."""
+
+    timestamps = {
+        key: datetime.fromisoformat(raw[key]) if raw.get(key) else None
+        for key in (
+            "poll_started_at",
+            "prior_poll_completed_at",
+            "observed_live_at",
+            "recommendation_ready_at",
+            "auto_pick_detected_at",
+            "auto_pick_disable_requested_at",
+            "auto_pick_disabled_at",
+        )
+    }
+    return TimingEvidence(
+        **timestamps,
+        browser_clock_remaining_ms=raw.get("browser_clock_remaining_ms"),
+        browser_clock_precision_ms=raw.get("browser_clock_precision_ms"),
+        pick_clock_duration_ms=int(raw.get("pick_clock_duration_ms", 120_000)),
+    )
 
 
 def _latency_summary(values: list[int]) -> dict[str, float | int | None]:

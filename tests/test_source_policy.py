@@ -14,6 +14,7 @@ from draft_assistant.interfaces.browser_observation import (
 )
 from draft_assistant.interfaces.sleeper_draftboard import parse_visible_draftboard
 from draft_assistant.live_driver import ClockFirstDraftDriver
+from draft_assistant.lookahead import LookaheadPlanner, pick_label_for_number
 from draft_assistant.models import DraftState, NewsDecision, NewsReview
 from draft_assistant.policies.sleeper_special_teams import SleeperRankedSpecialTeamsPolicy
 from draft_assistant.policies.source_board import SourceBoardPolicy
@@ -398,6 +399,51 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertFalse(attempt.acted)
         self.assertEqual(room.picks, [])
         self.assertIn("mock_draft_ready", attempt.gate.reasons[-1])
+
+    def test_lookahead_prepares_the_next_snake_pick_and_filters_newly_drafted_players(self) -> None:
+        state = DraftState(
+            round_number=1,
+            pick_label="1.06",
+            roster_positions=("QB",),
+            drafted_players=frozenset({"Josh Allen", "Lamar Jackson", "Jahmyr Gibbs", "Bijan Robinson"}),
+            available_players=frozenset({"Jayden Daniels", "Jalen Hurts", "Justin Herbert"}),
+            current_pick_number=6,
+            our_pick_number=20,
+        )
+        prepared = LookaheadPlanner().prepare_next(self.board, self.policy, state)
+
+        self.assertIsNotNone(prepared)
+        self.assertEqual((prepared.round_number, prepared.pick_label), (2, "2.08"))
+        self.assertEqual(prepared.candidates[0].player.name, "Jayden Daniels")
+
+        at_clock = replace(
+            state,
+            round_number=2,
+            pick_label="2.08",
+            current_pick_number=20,
+            drafted_players=state.drafted_players | frozenset({"Jayden Daniels"}),
+            available_players=frozenset({"Jalen Hurts", "Justin Herbert"}),
+        )
+        recommendation = prepared.recommendation_for(at_clock)
+
+        self.assertIsNotNone(recommendation)
+        self.assertEqual(recommendation.primary.player.name, "Jalen Hurts")
+
+    def test_lookahead_never_applies_to_a_changed_roster_or_pick(self) -> None:
+        state = DraftState(
+            round_number=1,
+            pick_label="1.06",
+            roster_positions=("QB",),
+            drafted_players=frozenset({"Josh Allen", "Lamar Jackson"}),
+            current_pick_number=6,
+            our_pick_number=20,
+        )
+        prepared = LookaheadPlanner().prepare_next(self.board, self.policy, state)
+
+        self.assertIsNotNone(prepared)
+        self.assertIsNone(prepared.recommendation_for(replace(state, roster_positions=("QB", "RB"))))
+        self.assertEqual(pick_label_for_number(20), (2, "2.08"))
+        self.assertEqual(pick_label_for_number(29), (3, "3.05"))
 
     def test_clock_driver_disables_auto_pick_then_salvages_the_live_pick(self) -> None:
         class Room:

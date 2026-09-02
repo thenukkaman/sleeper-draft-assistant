@@ -12,6 +12,7 @@ from typing import Protocol
 from .autonomy import AutonomousDraftGuard, ExecutionGate
 from .board import Board, normalize_name
 from .interfaces.browser_observation import BrowserObservation
+from .lookahead import PreparedPick
 from .models import Recommendation
 from .policies.base import DraftPolicy
 
@@ -69,7 +70,7 @@ class ClockFirstDraftDriver:
         self.policy = policy
         self.guard = guard
 
-    def run_once(self, room: DraftRoom) -> DraftAttempt:
+    def run_once(self, room: DraftRoom, prepared: PreparedPick | None = None) -> DraftAttempt:
         first = room.observe()
         if first.blocker is not None:
             return self._blocked_by_browser(first, None)
@@ -89,7 +90,7 @@ class ClockFirstDraftDriver:
                     recovery,
                 )
             first = room.observe()
-        recommendation = self.policy.recommend(self.board, first.to_state())
+        recommendation = self._recommend(first.to_state(), prepared)
         gate = self.guard.evaluate(first.to_state(), recommendation)
         if not gate.allowed:
             return DraftAttempt(
@@ -111,11 +112,11 @@ class ClockFirstDraftDriver:
             recovery = commit_recovery
             if not recovery.recovered or recovery.pick_was_missed:
                 state = room.observe().to_state()
-                recommendation = self.policy.recommend(self.board, state)
+                recommendation = self._recommend(state, prepared)
                 gate = self.guard.evaluate(state, recommendation)
                 return DraftAttempt(False, False, None, recommendation, gate, recovery.reason, recovery)
             commit = room.observe()
-            recommendation = self.policy.recommend(self.board, commit.to_state())
+            recommendation = self._recommend(commit.to_state(), prepared)
         commit_gate = self.guard.evaluate(commit.to_state(), recommendation)
         if not commit_gate.allowed:
             return DraftAttempt(
@@ -184,6 +185,15 @@ class ClockFirstDraftDriver:
             "Draft click verified in Sleeper.",
             recovery,
         )
+
+    def _recommend(self, state, prepared: PreparedPick | None) -> Recommendation:
+        """Use a validated precomputed ladder when it still exactly applies."""
+
+        if prepared is not None:
+            recommendation = prepared.recommendation_for(state)
+            if recommendation is not None:
+                return recommendation
+        return self.policy.recommend(self.board, state)
 
     def _blocked_by_browser(
         self,
