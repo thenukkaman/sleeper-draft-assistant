@@ -364,18 +364,18 @@ class SleeperPlaywrightTransport:
     def _wait_for_named_row(self, player_name: str) -> Any:
         """Allow the virtualized Sleeper table a bounded time to apply search.
 
-        The search input can update before React has rendered the matching
-        row.  This is intentionally a sub-second wait, not a generic retry of
-        a draft action: it only proves that the already named row exists.
+        The search input can update just before React renders the matching row.
+        This is intentionally a tiny bounded retry, not a generic retry of a
+        draft action: it only proves that the already named row exists.
         """
 
         last_error: SleeperPlaywrightTransportError | None = None
-        for attempt in range(8):
+        for attempt in range(3):
             try:
                 return self._named_row(player_name)
             except SleeperPlaywrightTransportError as error:
                 last_error = error
-                if attempt == 7:
+                if attempt == 2:
                     break
                 self.page.wait_for_timeout(50)
         assert last_error is not None
