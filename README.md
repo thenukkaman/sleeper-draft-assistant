@@ -88,6 +88,9 @@ The browser executor may act only when all of these are true:
 4. An `AVOID` player is marked by the policy as a genuine falling-price value; it is never an automatic ban or an automatic pick.
 5. A `CHECK_NEWS` player has a fresh (15 minutes or less), source-linked, `CLEAR` live-news review. A missing, stale, or blocked review fails closed.
 6. In Round 17, the selected DST is present in the currently visible Sleeper-ranked DST list; in Round 18, the same is true for the kicker list.
+7. The browser observation is clear. A visible dialog, pending-spinner request,
+   or unresponsive DOM/accessibility transport is a recorded blocker, not a
+   reason to click a nearby control or retry a pick.
 
 The source board governs all QB/RB/WR/TE choices. Per the approved exception, a separate plug-in uses the visible Sleeper rank only for DST in Round 17 and K in Round 18. No K/DST is selected earlier. A read-only API snapshot can never pass the final autonomous gate by itself: the browser adapter must observe that auto-pick is off.
 

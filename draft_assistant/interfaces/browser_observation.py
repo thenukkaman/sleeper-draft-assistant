@@ -21,6 +21,40 @@ class PlayerRowAction(StrEnum):
     DETAILS = "details"
 
 
+class BrowserBlockerKind(StrEnum):
+    """A browser condition that makes a draft action unsafe.
+
+    The runner records these independently from ``DraftState`` because they
+    describe the browser's ability to act, not the fantasy-football policy.
+    """
+
+    PRE_DRAFT_CONFIRMATION = "pre_draft_confirmation"
+    UNEXPECTED_DIALOG = "unexpected_dialog"
+    PENDING_REQUEST = "pending_request"
+    UNRESPONSIVE = "unresponsive"
+
+
+@dataclass(frozen=True)
+class BrowserBlocker:
+    """Structured evidence that the browser must not submit a pick.
+
+    ``summary`` is normalized visible text or a bounded transport error. It is
+    deliberately retained with the observation so the durable runner log can
+    distinguish an expected pre-draft confirmation from a spinner, an unknown
+    overlay, or a page that stopped answering DOM reads.
+    """
+
+    kind: BrowserBlockerKind
+    summary: str
+    action_labels: tuple[str, ...] = ()
+
+    def reason(self) -> str:
+        summary = self.summary.strip()
+        ending = "" if summary.endswith((".", "!", "?")) else "."
+        labels = f" Actions visible: {', '.join(self.action_labels)}." if self.action_labels else ""
+        return f"Browser blocker ({self.kind.value}): {summary}{ending}{labels}"
+
+
 @dataclass(frozen=True)
 class BrowserObservation:
     """Normalized values read from Sleeper's visible draft-room UI by any executor."""
@@ -39,6 +73,7 @@ class BrowserObservation:
     news_reviews: dict[str, NewsReview] | None = None
     sleeper_ranked_specialists: dict[str, tuple[str, ...]] | None = None
     player_row_actions: dict[str, frozenset[PlayerRowAction]] | None = None
+    blocker: BrowserBlocker | None = None
 
     def has_draft_action(self, player_name: str) -> bool:
         """Whether the current UI exposes an exact *draft* control for a name.

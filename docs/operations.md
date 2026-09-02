@@ -35,6 +35,30 @@ Before a live browser executor is considered for an unattended draft, it must:
 6. Run a fresh source-linked news check whenever a `CHECK_NEWS` player would
    otherwise become the recommendation.
 
+## Browser-blocker protocol
+
+Every browser observation must include either a clear page or a structured
+`BrowserBlocker`. The executor must fail closed—without clicking a player,
+retrying a previous click, or changing auto-pick—on any of the following:
+
+- a pre-draft confirmation (record its exact normalized text and buttons);
+- an unexpected visible dialog or overlay;
+- a request that remains a spinner beyond the executor's bounded read/action
+  deadline; or
+- an unresponsive DOM/accessibility transport.
+
+The start-confirmation path is a separate preflight capability, not part of
+the pick transaction. It may only accept a known, exact Sleeper confirmation
+after it is observed and explicitly authorized for that run. Unknown dialogs
+are never auto-accepted. After any resolution, the executor must read a fresh,
+clear browser state before entering the clock-first pick flow.
+
+This distinction matters in the observed Sleeper mock-creation failure: the
+`NEW MOCK DRAFT` control became a spinner and the page stayed on the lobby;
+there was no active Sleeper start-confirmation dialog. Treating that as a
+confirmation and clicking arbitrary controls would be unsafe and would hide
+the actual request failure.
+
 ## Local workflow
 
 ```powershell

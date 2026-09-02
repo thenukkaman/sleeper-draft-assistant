@@ -6,7 +6,12 @@ import unittest
 
 from draft_assistant.autonomy import AutonomousDraftGuard
 from draft_assistant.board import load_default_board
-from draft_assistant.interfaces.browser_observation import BrowserObservation, PlayerRowAction
+from draft_assistant.interfaces.browser_observation import (
+    BrowserBlocker,
+    BrowserBlockerKind,
+    BrowserObservation,
+    PlayerRowAction,
+)
 from draft_assistant.interfaces.sleeper_draftboard import parse_visible_draftboard
 from draft_assistant.live_driver import ClockFirstDraftDriver
 from draft_assistant.models import DraftState, NewsDecision, NewsReview
@@ -299,6 +304,100 @@ class SourceBoardPolicyTests(unittest.TestCase):
 
         self.assertFalse(attempt.acted)
         self.assertIn("semantic DRAFT control", attempt.reason)
+
+    def test_clock_driver_fail_closes_on_a_browser_blocker(self) -> None:
+        class Room:
+            def __init__(self, observation):
+                self.observation = observation
+                self.auto_pick_changes = []
+                self.picks = []
+
+            def observe(self):
+                return self.observation
+
+            def set_auto_pick(self, enabled):
+                self.auto_pick_changes.append(enabled)
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+
+        observation = BrowserObservation(
+            league_id="league-1",
+            username="kenikh",
+            draft_status="drafting",
+            auto_pick_enabled=True,
+            round_number=1,
+            pick_label="1.05",
+            current_pick_number=5,
+            our_pick_number=5,
+            roster_positions=(),
+            drafted_players=frozenset(),
+            available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+            blocker=BrowserBlocker(
+                BrowserBlockerKind.PENDING_REQUEST,
+                "NEW MOCK DRAFT remained a spinner after the click.",
+            ),
+        )
+        room = Room(observation)
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(room)
+
+        self.assertFalse(attempt.acted)
+        self.assertFalse(attempt.confirmed)
+        self.assertEqual(room.picks, [])
+        self.assertEqual(room.auto_pick_changes, [])
+        self.assertFalse(attempt.gate.allowed)
+        self.assertIn("pending_request", attempt.gate.reasons[-1])
+        self.assertIn("Browser UI is blocked", attempt.reason)
+
+    def test_clock_driver_stops_if_a_confirmation_appears_before_commit(self) -> None:
+        class Room:
+            def __init__(self, first, blocked):
+                self.observations = [first, blocked]
+                self.picks = []
+
+            def observe(self):
+                return self.observations.pop(0) if len(self.observations) > 1 else self.observations[0]
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+
+        first = BrowserObservation(
+            league_id="league-1",
+            username="kenikh",
+            draft_status="drafting",
+            auto_pick_enabled=False,
+            round_number=1,
+            pick_label="1.05",
+            current_pick_number=5,
+            our_pick_number=5,
+            roster_positions=(),
+            drafted_players=frozenset(),
+            available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+        )
+        blocked = replace(
+            first,
+            blocker=BrowserBlocker(
+                BrowserBlockerKind.PRE_DRAFT_CONFIRMATION,
+                "Are you sure you want to start the draft",
+                ("Cancel", "Start Draft"),
+            ),
+        )
+        room = Room(first, blocked)
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(room)
+
+        self.assertFalse(attempt.acted)
+        self.assertEqual(room.picks, [])
+        self.assertIn("pre_draft_confirmation", attempt.gate.reasons[-1])
 
     def test_clock_driver_disables_auto_pick_then_salvages_the_live_pick(self) -> None:
         class Room:

@@ -71,6 +71,8 @@ class ClockFirstDraftDriver:
 
     def run_once(self, room: DraftRoom) -> DraftAttempt:
         first = room.observe()
+        if first.blocker is not None:
+            return self._blocked_by_browser(first, None)
         recovery = self._recover_auto_pick(room, first)
         if recovery is not None:
             if not recovery.recovered or recovery.pick_was_missed:
@@ -102,6 +104,8 @@ class ClockFirstDraftDriver:
 
         # The UI may change in the milliseconds between recommendation and click.
         commit = room.observe()
+        if commit.blocker is not None:
+            return self._blocked_by_browser(commit, recovery)
         commit_recovery = self._recover_auto_pick(room, commit)
         if commit_recovery is not None:
             recovery = commit_recovery
@@ -178,6 +182,33 @@ class ClockFirstDraftDriver:
             recommendation,
             commit_gate,
             "Draft click verified in Sleeper.",
+            recovery,
+        )
+
+    def _blocked_by_browser(
+        self,
+        observation: BrowserObservation,
+        recovery: AutoPickRecovery | None,
+    ) -> DraftAttempt:
+        """Fail closed before a modal, spinner, or stalled page can cost a pick.
+
+        Browser recovery belongs to the executor, not the ranking policy. This
+        transaction therefore records the policy's current recommendation for
+        diagnosis but never toggles auto-pick or attempts a player action while
+        a browser blocker is present.
+        """
+
+        recommendation = self.policy.recommend(self.board, observation.to_state())
+        base_gate = self.guard.evaluate(observation.to_state(), recommendation)
+        blocker_reason = observation.blocker.reason() if observation.blocker else "Browser blocker was not described."
+        gate = ExecutionGate(False, base_gate.reasons + (blocker_reason,))
+        return DraftAttempt(
+            False,
+            False,
+            None,
+            recommendation,
+            gate,
+            "Browser UI is blocked; do not submit, retry, or change auto-pick until the executor re-observes a clear state.",
             recovery,
         )
 
