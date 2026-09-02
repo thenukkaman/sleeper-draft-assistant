@@ -11,7 +11,7 @@ from draft_assistant.autonomy import AutonomousDraftGuard
 from draft_assistant.board import load_default_board
 from draft_assistant.interfaces.browser_observation import BrowserObservation
 from draft_assistant.live_driver import ClockFirstDraftDriver
-from draft_assistant.persistent_runner import JsonlRunnerJournal, PersistentDraftRunner
+from draft_assistant.persistent_runner import JsonlPickTelemetrySink, JsonlRunnerJournal, PersistentDraftRunner
 from draft_assistant.policies.source_board import SourceBoardPolicy
 
 
@@ -284,6 +284,32 @@ class PersistentDraftRunnerTests(unittest.TestCase):
         self.assertEqual(records[0]["action_outcome"], None)
         self.assertEqual(cycle.snapshot.prepared_player, "Jayden Daniels")
         self.assertNotIn("cookie", records[0])
+
+    def test_pick_telemetry_journal_is_append_only_and_contains_no_browser_credentials(self) -> None:
+        room = _Room(
+            self._observation(
+                current_pick_number=20,
+                our_pick_number=20,
+                round_number=2,
+                pick_label="2.08",
+            )
+        )
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "picks.jsonl"
+            runner = PersistentDraftRunner(
+                self.board,
+                self.policy,
+                self.driver,
+                telemetry_sink=JsonlPickTelemetrySink(path),
+                now=self.clock.now,
+            )
+            cycle = runner.poll_once(room)
+            records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(cycle.attempt.confirmed)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["pick_label"], "2.08")
+        self.assertNotIn("cookie", json.dumps(records).casefold())
 
 
 if __name__ == "__main__":

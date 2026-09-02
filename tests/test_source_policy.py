@@ -306,6 +306,58 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertFalse(attempt.acted)
         self.assertIn("semantic DRAFT control", attempt.reason)
 
+    def test_clock_driver_can_reveal_one_virtualized_player_row_then_revalidate(self) -> None:
+        class Room:
+            def __init__(self, observation):
+                self.observation = observation
+                self.picks = []
+                self.revealed = []
+
+            def observe(self):
+                return self.observation
+
+            def ensure_draft_action(self, player_name):
+                self.revealed.append(player_name)
+                self.observation = replace(
+                    self.observation,
+                    player_row_actions={player_name: frozenset({PlayerRowAction.DRAFT})},
+                )
+                return self.observation
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+                self.observation = replace(
+                    self.observation,
+                    drafted_players=self.observation.drafted_players | frozenset({player_name}),
+                    current_pick_number=self.observation.current_pick_number + 1,
+                )
+
+        observation = BrowserObservation(
+            league_id="league-1",
+            username="kenikh",
+            draft_status="drafting",
+            auto_pick_enabled=False,
+            round_number=1,
+            pick_label="1.05",
+            current_pick_number=5,
+            our_pick_number=5,
+            roster_positions=(),
+            drafted_players=frozenset(),
+            available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+            player_row_actions={"Josh Allen": frozenset()},
+        )
+        room = Room(observation)
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(room)
+
+        self.assertTrue(attempt.confirmed)
+        self.assertEqual(room.revealed, ["Josh Allen"])
+        self.assertEqual(room.picks, ["Josh Allen"])
+
     def test_clock_driver_fail_closes_on_a_browser_blocker(self) -> None:
         class Room:
             def __init__(self, observation):

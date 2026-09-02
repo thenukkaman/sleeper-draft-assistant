@@ -11,6 +11,7 @@ class _Transport:
     def __init__(self, observation: BrowserObservation) -> None:
         self.observation = observation
         self.draft_requests: list[str] = []
+        self.row_reveal_requests: list[str] = []
         self.auto_pick_off_requests = 0
 
     def observe_visible_draft_room(self) -> BrowserObservation:
@@ -18,6 +19,9 @@ class _Transport:
 
     def click_exact_draft(self, player_name: str) -> None:
         self.draft_requests.append(player_name)
+
+    def reveal_player_row(self, player_name: str) -> None:
+        self.row_reveal_requests.append(player_name)
 
     def set_auto_pick_off(self) -> None:
         self.auto_pick_off_requests += 1
@@ -74,6 +78,16 @@ class SleeperBrowserDraftRoomTests(unittest.TestCase):
         self.assertEqual(transport.auto_pick_off_requests, 1)
         with self.assertRaisesRegex(RuntimeError, "only turn auto-pick off"):
             room.set_auto_pick(True)
+
+    def test_revealing_a_virtualized_player_row_is_not_a_draft_action(self) -> None:
+        transport = _Transport(self._observation())
+        room = SleeperBrowserDraftRoom(transport)
+
+        observed = room.ensure_draft_action("Lamar Jackson")
+
+        self.assertEqual(transport.row_reveal_requests, ["Lamar Jackson"])
+        self.assertEqual(transport.draft_requests, [])
+        self.assertEqual(observed, transport.observation)
 
     def test_requires_a_fresh_observation_before_any_browser_action(self) -> None:
         transport = _Transport(self._observation())

@@ -40,6 +40,36 @@ Any dialog, overlay, spinner, empty player list, unknown action, or DOM read
 failure becomes a structured `BrowserBlocker`; it is never worked around with
 coordinates or a nearby visible control.
 
+## Optional local-CDP implementation
+
+`SleeperPlaywrightTransport` is one thin, optional implementation of this
+contract. It connects through a local CDP endpoint to a browser that the user
+has already opened and authenticated. It has no browser-launch code, cookie or
+profile reader, private Sleeper API client, coordinate click, or operation to
+enable auto-pick. Closing its local session disconnects the client; it does not
+close the user's browser.
+
+The adapter derives only from the visible DOM: draft cells with IDs such as
+`draft-cell-20`, cell text including the visible countdown, visible player-row
+text, `.draft-button`, the named player search input, and the semantic
+`TURN OFF AUTO-PICK` button. Any selector that is absent or ambiguous fails
+closed. A virtualized player table is handled by searching the exact proposed
+name, re-observing, and repeating the full commit validation before a draft
+button can be clicked.
+
+The local worker has two deliberately separate entry modes:
+
+- `live` starts only from the approved league's `/predraft` route, verifies the
+  visible league/account, and clicks only `DRAFTROOM`. It then waits for a live
+  clock; it never clicks `START DRAFT`.
+- `attached-draft` expects an already-open `/draft/nfl/` room and is for an
+  explicitly created mock during controlled rehearsal. Do not use it to bypass
+  the live preflight checks.
+
+The browser extra and an actual local CDP endpoint are both required before
+this code can operate. Until the timing rehearsal passes, this remains a
+mock-only capability.
+
 ## Timing
 
 The worker calls `PersistentDraftRunner.poll_once` on a fixed cadence outside

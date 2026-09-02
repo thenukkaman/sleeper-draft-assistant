@@ -69,6 +69,23 @@ clock only when auto-pick recovery succeeded and the clock has advanced; it
 fails closed on an unverified click, browser blocker, account mismatch, or
 failed recovery.
 
+## Optional local browser worker
+
+The optional `browser` extra provides a narrow Playwright/CDP transport. It
+attaches to a browser the user has already opened and authenticated locally;
+it does not launch a browser, read cookies, persist a profile, or use a private
+Sleeper API. Its only submission path is a freshly located player row's
+semantic `.draft-button`.
+
+The host entrypoint is `draft_assistant.local_worker`. `--mode live` first
+validates the approved pre-draft route and visible account/league, clicks only
+`DRAFTROOM`, and then waits for Sleeper to open a clock. `--mode attached-draft`
+is for a deliberately opened mock draft-room only. Neither mode has any
+authority to click mock `START DRAFT` or enable auto-pick.
+
+The optional dependency is deliberately not installed by this project yet.
+The next gate is a local-CDP timing rehearsal against a mock, not a live draft.
+
 ## Local test
 
 From this folder:

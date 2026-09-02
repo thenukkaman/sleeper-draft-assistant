@@ -34,6 +34,11 @@ is not a replacement for the host browser transport. Its default 250-ms
 active-draft cadence is a starting measurement profile, not an assumed
 performance result. Capture the actual observation cost before changing it.
 
+The optional Playwright transport is a local-CDP client, not a remote-auth
+solution. Its worker attaches only to a manually authenticated local browser,
+and the first live preflight can click only the approved `DRAFTROOM` control.
+Its `attached-draft` mode is reserved for an explicitly created mock room.
+
 ## Required live-runner contract
 
 Before a live browser executor is considered for an unattended draft, it must:

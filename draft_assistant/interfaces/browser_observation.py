@@ -33,6 +33,7 @@ class BrowserBlockerKind(StrEnum):
     UNEXPECTED_DIALOG = "unexpected_dialog"
     PENDING_REQUEST = "pending_request"
     UNRESPONSIVE = "unresponsive"
+    IDENTITY_MISMATCH = "identity_mismatch"
 
 
 @dataclass(frozen=True)

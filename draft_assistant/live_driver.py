@@ -213,6 +213,54 @@ class ClockFirstDraftDriver:
                 commit,
             )
         if not commit.has_draft_action(primary.player.name):
+            ensure = getattr(room, "ensure_draft_action", None)
+            if callable(ensure):
+                # A virtualized Sleeper table may require a name search before
+                # its exact row-level DRAFT control exists in the DOM.  This is
+                # a bounded, non-submitting UI preparation step.  Treat its
+                # result like another commit observation, not an authorization.
+                commit = ensure(primary.player.name)
+                event("commit_observation")
+                if commit.blocker is not None:
+                    return self._blocked_by_browser(commit, recovery)
+                recommendation = self._recommend(commit.to_state(), prepared)
+                event("recommendation_ready")
+                commit_gate = self.guard.evaluate(commit.to_state(), recommendation)
+                if not commit_gate.allowed:
+                    return DraftAttempt(
+                        False,
+                        False,
+                        None,
+                        recommendation,
+                        commit_gate,
+                        "Draft state changed while locating the named Sleeper player row.",
+                        recovery,
+                        commit,
+                    )
+                if (commit.pick_label, commit.current_pick_number) != (first.pick_label, first.current_pick_number):
+                    return DraftAttempt(
+                        False,
+                        False,
+                        None,
+                        recommendation,
+                        commit_gate,
+                        "The clock advanced while locating the named Sleeper player row.",
+                        recovery,
+                        commit,
+                    )
+                primary = recommendation.primary
+                if primary is None:
+                    return DraftAttempt(
+                        False,
+                        False,
+                        None,
+                        recommendation,
+                        commit_gate,
+                        "No named player was returned after locating the Sleeper row.",
+                        recovery,
+                        commit,
+                    )
+        if primary is None or not commit.has_draft_action(primary.player.name):
             return DraftAttempt(
                 False,
                 False,

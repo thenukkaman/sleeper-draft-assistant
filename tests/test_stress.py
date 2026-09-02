@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -10,6 +11,7 @@ from draft_assistant.stress import (
     PickTelemetry,
     TimingEvidence,
     read_mock_telemetry,
+    read_pick_telemetry_jsonl,
     summarize,
     write_mock_telemetry,
 )
@@ -94,3 +96,38 @@ class StressTelemetryTests(unittest.TestCase):
         self.assertEqual(report["auto_pick_disable_request_latency_ms"]["median"], 40)
         self.assertEqual(report["auto_pick_toggle_verification_latency_ms"]["median"], 260)
         self.assertEqual(report["failures"][0]["pick_label"], "2.08")
+
+    def test_reads_append_only_pick_telemetry_records(self) -> None:
+        start = datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc)
+        pick = PickTelemetry(
+            pick_label="1.05",
+            decision_started_at=start,
+            selection_requested_at=start + timedelta(milliseconds=125),
+            confirmed_at=start + timedelta(milliseconds=300),
+            expected_player="Josh Allen",
+            selected_player="Josh Allen",
+            current_pick_number=5,
+            auto_pick_before=False,
+            auto_pick_after=False,
+            outcome="confirmed",
+        )
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "picks.jsonl"
+            path.write_text(json.dumps({"picks": "not a pick"}) + "\n", encoding="utf-8")
+            # The writer's serialized record is the only supported JSONL row.
+            path.write_text(json.dumps({
+                "pick_label": pick.pick_label,
+                "decision_started_at": pick.decision_started_at.isoformat(),
+                "selection_requested_at": pick.selection_requested_at.isoformat(),
+                "confirmed_at": pick.confirmed_at.isoformat(),
+                "expected_player": pick.expected_player,
+                "selected_player": pick.selected_player,
+                "current_pick_number": pick.current_pick_number,
+                "auto_pick_before": pick.auto_pick_before,
+                "auto_pick_after": pick.auto_pick_after,
+                "outcome": pick.outcome,
+            }) + "\n", encoding="utf-8")
+            records = read_pick_telemetry_jsonl(path)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].selected_player, "Josh Allen")

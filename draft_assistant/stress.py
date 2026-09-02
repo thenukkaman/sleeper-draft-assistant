@@ -181,32 +181,21 @@ def read_mock_telemetry(path: Path) -> MockTelemetry:
         mock_id=str(raw["mock_id"]),
         started_at=datetime.fromisoformat(raw["started_at"]),
         completed_at=datetime.fromisoformat(raw["completed_at"]) if raw.get("completed_at") else None,
-        picks=tuple(
-            PickTelemetry(
-                pick_label=str(pick["pick_label"]),
-                decision_started_at=datetime.fromisoformat(pick["decision_started_at"]),
-                selection_requested_at=(
-                    datetime.fromisoformat(pick["selection_requested_at"])
-                    if pick.get("selection_requested_at")
-                    else None
-                ),
-                confirmed_at=datetime.fromisoformat(pick["confirmed_at"]) if pick.get("confirmed_at") else None,
-                expected_player=pick.get("expected_player"),
-                selected_player=pick.get("selected_player"),
-                current_pick_number=int(pick["current_pick_number"]),
-                auto_pick_before=pick.get("auto_pick_before"),
-                auto_pick_after=pick.get("auto_pick_after"),
-                auto_pick_recovery=str(pick.get("auto_pick_recovery", "not_recorded")),
-                outcome=str(pick["outcome"]),
-                reason=str(pick.get("reason", "")),
-                observed_candidates=tuple(pick.get("observed_candidates", ())),
-                prepared_player_before=pick.get("prepared_player_before"),
-                timing=_read_timing_evidence(pick.get("timing", {})),
-            )
-            for pick in raw["picks"]
-        ),
+        picks=tuple(_read_pick_telemetry(pick) for pick in raw["picks"]),
         result=str(raw["result"]),
         notes=tuple(raw.get("notes", ())),
+    )
+
+
+def read_pick_telemetry_jsonl(path: Path) -> tuple[PickTelemetry, ...]:
+    """Load one worker's append-only per-pick evidence without inventing rows."""
+
+    if not path.exists():
+        return ()
+    return tuple(
+        _read_pick_telemetry(json.loads(line))
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
     )
 
 
@@ -331,6 +320,30 @@ def _read_timing_evidence(raw: dict[str, Any]) -> TimingEvidence:
         browser_clock_remaining_ms=raw.get("browser_clock_remaining_ms"),
         browser_clock_precision_ms=raw.get("browser_clock_precision_ms"),
         pick_clock_duration_ms=int(raw.get("pick_clock_duration_ms", 120_000)),
+    )
+
+
+def _read_pick_telemetry(pick: dict[str, Any]) -> PickTelemetry:
+    return PickTelemetry(
+        pick_label=str(pick["pick_label"]),
+        decision_started_at=datetime.fromisoformat(pick["decision_started_at"]),
+        selection_requested_at=(
+            datetime.fromisoformat(pick["selection_requested_at"])
+            if pick.get("selection_requested_at")
+            else None
+        ),
+        confirmed_at=datetime.fromisoformat(pick["confirmed_at"]) if pick.get("confirmed_at") else None,
+        expected_player=pick.get("expected_player"),
+        selected_player=pick.get("selected_player"),
+        current_pick_number=int(pick["current_pick_number"]),
+        auto_pick_before=pick.get("auto_pick_before"),
+        auto_pick_after=pick.get("auto_pick_after"),
+        auto_pick_recovery=str(pick.get("auto_pick_recovery", "not_recorded")),
+        outcome=str(pick["outcome"]),
+        reason=str(pick.get("reason", "")),
+        observed_candidates=tuple(pick.get("observed_candidates", ())),
+        prepared_player_before=pick.get("prepared_player_before"),
+        timing=_read_timing_evidence(pick.get("timing", {})),
     )
 
 

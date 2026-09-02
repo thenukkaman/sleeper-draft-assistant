@@ -68,6 +68,20 @@ class JsonlRunnerJournal:
             journal.flush()
 
 
+class JsonlPickTelemetrySink:
+    """Append-only per-pick telemetry for one local mock or live session."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def record(self, telemetry: PickTelemetry) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(asdict(telemetry), default=str, separators=(",", ":"))
+        with self.path.open("a", encoding="utf-8") as journal:
+            journal.write(serialized + "\n")
+            journal.flush()
+
+
 @dataclass(frozen=True)
 class PollCycle:
     """Result of one scheduling tick; no state is inferred from a UI repaint."""

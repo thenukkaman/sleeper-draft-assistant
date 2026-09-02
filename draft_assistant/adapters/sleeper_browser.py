@@ -22,6 +22,8 @@ class SleeperDomTransport(Protocol):
 
     def click_exact_draft(self, player_name: str) -> None: ...
 
+    def reveal_player_row(self, player_name: str) -> None: ...
+
     def set_auto_pick_off(self) -> None: ...
 
 
@@ -57,6 +59,18 @@ class SleeperBrowserDraftRoom(DraftRoom):
         }:
             raise RuntimeError(f"{player_name!r} is not in the last visible Sleeper player list.")
         self.transport.click_exact_draft(player_name)
+
+    def ensure_draft_action(self, player_name: str) -> BrowserObservation:
+        """Search one named row, then return a fresh structured observation.
+
+        Sleeper virtualizes the player table, so a source-board player can be
+        available without being in the current viewport.  Revealing the row is
+        not a draft action.  The driver still rechecks the live clock, identity,
+        and exact semantic DRAFT control before it can submit a pick.
+        """
+
+        self.transport.reveal_player_row(player_name)
+        return self.observe()
 
     def set_auto_pick(self, enabled: bool) -> None:
         if enabled:
