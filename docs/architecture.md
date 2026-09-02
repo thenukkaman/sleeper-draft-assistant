@@ -42,7 +42,8 @@ transaction:
 
 1. Observe the draft room.
 2. Form a recommendation.
-3. Re-observe and validate that the precise pick is still live.
+3. Re-observe, re-filter the prepared ladder against the latest availability,
+   and validate that the precise pick is still live.
 4. Submit exactly one named player action.
 5. Re-observe and verify Sleeper recorded that player and advanced the clock.
 
@@ -78,6 +79,12 @@ the target pick label, roster, and known drafted set still match. The final
 browser observation, autonomous gate, exact `DRAFT` control, and Sleeper
 publication check remain mandatory; lookahead reduces deliberation latency but
 never bypasses an execution safeguard.
+
+The action transaction filters that ladder again at commit time. If its
+prepared primary disappeared between the prior opponent observation and the
+final pre-click observation, it promotes the next eligible candidate and
+records both the prepared primary and selected player in telemetry. It does
+not click the stale primary or stop at a preventable stale-state block.
 
 ## Annual refresh
 

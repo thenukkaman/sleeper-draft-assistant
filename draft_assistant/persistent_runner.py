@@ -143,15 +143,19 @@ class PersistentDraftRunner:
             observed_at=observed_at,
             prior_poll_completed_at=previous_poll_completed_at,
             events=events,
+            prepared_pick=self.prepared_pick,
         )
         if self.telemetry_sink is not None:
             self.telemetry_sink.record(telemetry)
 
-        # Use the publication observation to warm the next ladder immediately;
-        # no future clock waits for the ordinary polling cadence.
-        self._prepare_from(attempt.final_observation or observation)
+        # Use the latest post-transaction observation to warm the next ladder
+        # immediately; no future clock waits for the ordinary polling cadence.
+        # This also prevents an auto-pick recovery or stale-clock branch from
+        # persisting the pre-recovery observation as if it were current.
+        final_observation = attempt.final_observation or observation
+        self._prepare_from(final_observation)
         completed_at = self.now()
-        snapshot = self._snapshot(observation, observed_at, completed_at, attempt)
+        snapshot = self._snapshot(final_observation, observed_at, completed_at, attempt)
         self._record_snapshot(snapshot)
         self._last_poll_completed_at = completed_at
         return PollCycle(observation, self.prepared_pick, attempt, telemetry, snapshot)
@@ -228,6 +232,7 @@ class PersistentDraftRunner:
         observed_at: datetime,
         prior_poll_completed_at: datetime | None,
         events: dict[str, datetime],
+        prepared_pick: PreparedPick | None,
     ) -> PickTelemetry:
         recommendation = attempt.recommendation
         primary = recommendation.primary
@@ -273,5 +278,10 @@ class PersistentDraftRunner:
             ),
             reason=attempt.reason,
             observed_candidates=tuple(candidate.player.name for candidate in recommendation.candidates[:5]),
+            prepared_player_before=(
+                prepared_pick.candidates[0].player.name
+                if prepared_pick is not None and prepared_pick.candidates
+                else None
+            ),
             timing=timing,
         )

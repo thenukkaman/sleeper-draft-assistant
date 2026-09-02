@@ -112,8 +112,9 @@ class ClockFirstDraftDriver:
         recovery = self._recover_auto_pick(room, first, event)
         if recovery is not None:
             if not recovery.recovered or recovery.pick_was_missed:
-                state = room.observe().to_state()
-                recommendation = self.policy.recommend(self.board, state)
+                final_observation = room.observe()
+                state = final_observation.to_state()
+                recommendation = self._recommend(state, prepared)
                 gate = self.guard.evaluate(state, recommendation)
                 return DraftAttempt(
                     False,
@@ -123,6 +124,7 @@ class ClockFirstDraftDriver:
                     gate,
                     recovery.reason,
                     recovery,
+                    final_observation,
                 )
             first = room.observe()
             event("post_recovery_observation")
@@ -138,6 +140,7 @@ class ClockFirstDraftDriver:
                 gate,
                 "Initial clock/identity gate blocked action.",
                 recovery,
+                first,
             )
 
         # The UI may change in the milliseconds between recommendation and click.
@@ -149,14 +152,30 @@ class ClockFirstDraftDriver:
         if commit_recovery is not None:
             recovery = commit_recovery
             if not recovery.recovered or recovery.pick_was_missed:
-                state = room.observe().to_state()
+                final_observation = room.observe()
+                state = final_observation.to_state()
                 recommendation = self._recommend(state, prepared)
                 gate = self.guard.evaluate(state, recommendation)
-                return DraftAttempt(False, False, None, recommendation, gate, recovery.reason, recovery)
+                return DraftAttempt(
+                    False,
+                    False,
+                    None,
+                    recommendation,
+                    gate,
+                    recovery.reason,
+                    recovery,
+                    final_observation,
+                )
             commit = room.observe()
             event("post_recovery_commit_observation")
-            recommendation = self._recommend(commit.to_state(), prepared)
-            event("recommendation_ready")
+
+        # Re-derive the decision from the just-read commit state.  Normally
+        # this is a cheap filter of the prepared ladder.  If an opponent took
+        # its primary during the short interval since preparation, the next
+        # viable candidate becomes primary before we ask the browser to act.
+        # Lookahead is therefore a latency optimization, never stale authority.
+        recommendation = self._recommend(commit.to_state(), prepared)
+        event("recommendation_ready")
         commit_gate = self.guard.evaluate(commit.to_state(), recommendation)
         if not commit_gate.allowed:
             return DraftAttempt(
@@ -167,6 +186,7 @@ class ClockFirstDraftDriver:
                 commit_gate,
                 "Draft state changed before commit.",
                 recovery,
+                commit,
             )
         if (commit.pick_label, commit.current_pick_number) != (first.pick_label, first.current_pick_number):
             return DraftAttempt(
@@ -177,11 +197,21 @@ class ClockFirstDraftDriver:
                 commit_gate,
                 "The clock advanced before commit.",
                 recovery,
+                commit,
             )
 
         primary = recommendation.primary
         if primary is None:
-            return DraftAttempt(False, False, None, recommendation, commit_gate, "No named player was returned.", recovery)
+            return DraftAttempt(
+                False,
+                False,
+                None,
+                recommendation,
+                commit_gate,
+                "No named player was returned.",
+                recovery,
+                commit,
+            )
         if not commit.has_draft_action(primary.player.name):
             return DraftAttempt(
                 False,
@@ -191,6 +221,7 @@ class ClockFirstDraftDriver:
                 commit_gate,
                 "Sleeper did not expose an exact semantic DRAFT control for the recommended player; do not click a queue or details control.",
                 recovery,
+                commit,
             )
         event("selection_requested")
         room.draft(primary.player.name)
@@ -265,6 +296,7 @@ class ClockFirstDraftDriver:
             gate,
             "Browser UI is blocked; do not submit, retry, or change auto-pick until the executor re-observes a clear state.",
             recovery,
+            observation,
         )
 
     def _recover_auto_pick(

@@ -54,6 +54,7 @@ class PickTelemetry:
     auto_pick_recovery: str = "not_needed"
     reason: str = ""
     observed_candidates: tuple[str, ...] = ()
+    prepared_player_before: str | None = None
     timing: TimingEvidence = field(default_factory=TimingEvidence)
 
     @property
@@ -199,6 +200,7 @@ def read_mock_telemetry(path: Path) -> MockTelemetry:
                 outcome=str(pick["outcome"]),
                 reason=str(pick.get("reason", "")),
                 observed_candidates=tuple(pick.get("observed_candidates", ())),
+                prepared_player_before=pick.get("prepared_player_before"),
                 timing=_read_timing_evidence(pick.get("timing", {})),
             )
             for pick in raw["picks"]
@@ -224,6 +226,12 @@ def summarize(mocks: Iterable[MockTelemetry]) -> dict[str, Any]:
         "picks_missed": outcomes["missed"],
         "unverified_actions": outcomes["unverified"],
         "policy_mismatches": outcomes["policy_mismatch"],
+        "prepared_ladder_fallbacks": sum(
+            pick.prepared_player_before is not None
+            and pick.selected_player is not None
+            and pick.prepared_player_before.casefold() != pick.selected_player.casefold()
+            for pick in picks
+        ),
         "auto_pick_incidents": sum(
             pick.auto_pick_before is True or pick.auto_pick_after is True for pick in picks
         ),
@@ -293,6 +301,8 @@ def summarize(mocks: Iterable[MockTelemetry]) -> dict[str, Any]:
                 "auto_pick_before": pick.auto_pick_before,
                 "auto_pick_after": pick.auto_pick_after,
                 "auto_pick_recovery": pick.auto_pick_recovery,
+                "prepared_player_before": pick.prepared_player_before,
+                "selected_player": pick.selected_player,
             }
             for run in runs
             for pick in run.picks

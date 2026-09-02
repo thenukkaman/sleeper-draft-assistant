@@ -14,6 +14,21 @@ The repository can:
 It cannot yet autonomously draft in Sleeper. There is deliberately no live
 pick-submission implementation in this repository.
 
+## Host-execution gate
+
+The browser worker must run as one continuous local desktop task, not as a
+series of disconnected scheduled invocations. On the Windows host, Sleeper
+must remain in the active desktop session, the machine must stay unlocked and
+online, and no competing computer-use task may control the same browser. A
+schedule may wake or start the task, but it is not proof that the browser
+control remains live for an 18-round draft.
+
+Before authorizing live drafting, run a single continuous timing rehearsal on
+the intended host through the full mock lifecycle and prove that the local
+append-only journal receives every poll and action event. If the host loses
+foreground control, browser access, network, or process continuity, the
+runner must fail closed and the draft is a no-go for unattended execution.
+
 ## Required live-runner contract
 
 Before a live browser executor is considered for an unattended draft, it must:
@@ -112,6 +127,11 @@ timestamp for each of these events:
 4. auto-pick first seen, targeted toggle request, and verified toggle-off;
    and
 5. the exact player, pick label, candidates, browser state, and outcome.
+
+For a prepared-ladder path, preserve the prepared primary and the final
+selected player separately. A changed pair is expected only when the commit
+observation proves the prepared primary became unavailable; it is evidence of
+successful real-time contingency handling, not a policy mismatch.
 
 The countdown produces an *estimated* pick-open timestamp: it is derived from
 the observed remaining time and explicitly retains its one-second display

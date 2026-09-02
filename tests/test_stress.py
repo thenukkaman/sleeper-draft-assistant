@@ -28,6 +28,7 @@ class StressTelemetryTests(unittest.TestCase):
             current_pick_number=5,
             auto_pick_before=False,
             auto_pick_after=False,
+            prepared_player_before="Lamar Jackson",
             auto_pick_recovery="not_needed",
             outcome="confirmed",
             timing=TimingEvidence(
@@ -76,6 +77,7 @@ class StressTelemetryTests(unittest.TestCase):
         self.assertEqual(report["mocks_completed"], 1)
         self.assertEqual(report["picks_confirmed"], 1)
         self.assertEqual(report["picks_missed"], 1)
+        self.assertEqual(report["prepared_ladder_fallbacks"], 1)
         self.assertEqual(report["auto_pick_incidents"], 1)
         self.assertEqual(report["auto_pick_recovery_failures"], 1)
         self.assertEqual(report["auto_pick_incidents_missing_timing"], 0)
