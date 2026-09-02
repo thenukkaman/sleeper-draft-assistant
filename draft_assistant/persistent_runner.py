@@ -46,6 +46,7 @@ class RunnerSnapshot:
     prepared_player: str | None
     action_outcome: str | None = None
     action_reason: str = ""
+    event: str = "poll_complete"
 
 
 class RunnerJournal(Protocol):
@@ -152,6 +153,24 @@ class PersistentDraftRunner:
             self._last_poll_completed_at = completed_at
             return PollCycle(observation, self.prepared_pick, None, None, snapshot)
 
+        if (
+            observation.draft_status == "drafting"
+            and observation.current_pick_number == observation.our_pick_number
+        ):
+            # Flush the active-clock detection before any recommendation,
+            # virtual-row lookup, or browser action can delay the completion
+            # snapshot. This is the durable notification timestamp used to
+            # measure detection latency independently from pick latency.
+            self._record_snapshot(
+                self._snapshot(
+                    observation,
+                    observed_at,
+                    observed_at,
+                    None,
+                    event="live_clock_observed",
+                )
+            )
+
         events: dict[str, datetime] = {}
 
         def record_event(name: str, at: datetime) -> None:
@@ -211,7 +230,13 @@ class PersistentDraftRunner:
             self._quarantined_pick_number = observation.current_pick_number
         self._prepare_from(final_observation)
         completed_at = self.now()
-        snapshot = self._snapshot(final_observation, observed_at, completed_at, attempt)
+        snapshot = self._snapshot(
+            final_observation,
+            observed_at,
+            completed_at,
+            attempt,
+            event="action_complete",
+        )
         self._record_snapshot(snapshot)
         self._last_poll_completed_at = completed_at
         return PollCycle(observation, self.prepared_pick, attempt, telemetry, snapshot)
@@ -237,6 +262,7 @@ class PersistentDraftRunner:
         observed_at: datetime,
         completed_at: datetime,
         attempt: DraftAttempt | None,
+        event: str = "poll_complete",
     ) -> RunnerSnapshot:
         prepared_primary = self.prepared_pick.candidates[0].player.name if self.prepared_pick and self.prepared_pick.candidates else None
         return RunnerSnapshot(
@@ -250,6 +276,7 @@ class PersistentDraftRunner:
             prepared_player=prepared_primary,
             action_outcome=self._outcome(attempt) if attempt else None,
             action_reason=attempt.reason if attempt else "",
+            event=event,
         )
 
     def _record_snapshot(self, snapshot: RunnerSnapshot) -> None:

@@ -311,6 +311,30 @@ class PersistentDraftRunnerTests(unittest.TestCase):
         self.assertEqual(records[0]["pick_label"], "2.08")
         self.assertNotIn("cookie", json.dumps(records).casefold())
 
+    def test_records_live_clock_detection_before_a_pick_action_completes(self) -> None:
+        room = _Room(
+            self._observation(
+                current_pick_number=20,
+                our_pick_number=20,
+                round_number=2,
+                pick_label="2.08",
+            )
+        )
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "runner.jsonl"
+            runner = PersistentDraftRunner(
+                self.board,
+                self.policy,
+                self.driver,
+                journal=JsonlRunnerJournal(path),
+                now=self.clock.now,
+            )
+            runner.poll_once(room)
+            records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([record["event"] for record in records], ["live_clock_observed", "action_complete"])
+        self.assertLessEqual(records[0]["observed_at"], records[1]["completed_at"])
+
 
 if __name__ == "__main__":
     unittest.main()
