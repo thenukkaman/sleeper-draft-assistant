@@ -63,6 +63,13 @@ waits for Sleeper to report `drafting`, confirms the league/account and
 auto-pick state, and only then permits the normal per-pick transaction. It
 must never use mock `START DRAFT` in the live league.
 
+When starting from `sleeper.com`, the default destination can be the Scores
+page. The entry route is therefore explicit: open the `FANTASY` menu, select
+the visible league entry for **North Redmond 40**, then validate league ID
+`1314724839730204672` and account `kenikh` on the resulting pre-draft page
+before using `DRAFTROOM`. The display name is a navigation aid only; the ID
+and account checks remain the authorization boundary.
+
 This distinction matters in the observed Sleeper mock-creation failure: the
 `NEW MOCK DRAFT` control became a spinner and the page stayed on the lobby;
 the runner never reached the mock board's `START DRAFT` control. Treating that
