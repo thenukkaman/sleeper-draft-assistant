@@ -312,8 +312,8 @@ def observation_from_dom_snapshot(
                 ("DRAFTROOM",),
             )
         return _blocked(target, BrowserBlockerKind.UNEXPECTED_DIALOG, "Sleeper is not on the approved draft-room route.")
-    if _has_unknown_overlay(raw, body_text):
-        return _blocked(target, BrowserBlockerKind.UNEXPECTED_DIALOG, "Sleeper reported an unexpected visible dialog or overlay.")
+    if dialog_summary := _dialog_blocker_summary(raw, body_text):
+        return _blocked(target, BrowserBlockerKind.UNEXPECTED_DIALOG, dialog_summary)
 
     current_pick, clock_remaining_ms = _current_pick_and_clock(cells)
     if current_pick is None or clock_remaining_ms is None:
@@ -421,10 +421,15 @@ def _contains_exact_visible_text(text: str, value: str) -> bool:
     return any(line.strip().casefold() == value.casefold() for line in text.splitlines())
 
 
-def _has_unknown_overlay(raw: Mapping[str, Any], body_text: str) -> bool:
+def _dialog_blocker_summary(raw: Mapping[str, Any], body_text: str) -> str | None:
+    dialog_text = "\n".join(str(value) for value in raw.get("dialogTexts", ()) if value)
+    if "Cookies and Personal Information" in dialog_text:
+        return "Cookie-consent dialog is visible; a user privacy choice is required before drafting can continue."
     if bool(raw.get("hasUnexpectedDialog")):
-        return True
-    return "NEW MOCK DRAFT" in body_text and "START DRAFT" not in body_text
+        return "Sleeper reported an unexpected visible dialog or overlay."
+    if "NEW MOCK DRAFT" in body_text and "START DRAFT" not in body_text:
+        return "Mock creation remained in an unresolved request state."
+    return None
 
 
 def _auto_pick_is_enabled(body_text: str) -> bool:
@@ -540,5 +545,6 @@ _DOM_SNAPSHOT_SCRIPT = f"""() => {{
     draftCells,
     playerRows: rows,
     hasUnexpectedDialog: Boolean(document.querySelector('[role=dialog][aria-modal=true]')),
+    dialogTexts: Array.from(document.querySelectorAll('[role=dialog]')).map(text),
   }};
 }}"""

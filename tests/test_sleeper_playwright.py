@@ -146,6 +146,19 @@ class SleeperPlaywrightParserTests(unittest.TestCase):
         self.assertIsNotNone(observation.blocker)
         self.assertEqual(observation.blocker.kind, BrowserBlockerKind.IDENTITY_MISMATCH)
 
+    def test_names_a_cookie_dialog_without_making_the_privacy_choice(self) -> None:
+        observation = observation_from_dom_snapshot(
+            self._raw(
+                hasUnexpectedDialog=True,
+                dialogTexts=["Cookies and Personal Information\nAllow All\nConfirm My Choices"],
+            ),
+            self.board,
+            self.target,
+        )
+
+        self.assertIsNotNone(observation.blocker)
+        self.assertIn("Cookie-consent", observation.blocker.summary)
+
     def test_refuses_a_draft_room_without_one_active_countdown_cell(self) -> None:
         raw = self._raw(draftCells=[])
         observation = observation_from_dom_snapshot(raw, self.board, self.target)
