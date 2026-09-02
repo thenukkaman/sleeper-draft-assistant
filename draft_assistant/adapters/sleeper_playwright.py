@@ -268,16 +268,16 @@ class SleeperPlaywrightTransport:
         try:
             row = self._named_row(player_name)
             button = row.locator(_DRAFT_BUTTON)
-            if button.count() != 1:
-                raise SleeperPlaywrightTransportError(
-                    f"Sleeper did not expose exactly one DRAFT button for {player_name!r}."
-                )
             wait_for = getattr(button, "wait_for", None)
             if callable(wait_for):
                 # React can publish the row and its child action in separate
                 # commits. Wait only for this exact control, not for a generic
                 # page-idle condition, so the clock remains bounded.
                 wait_for(state="visible", timeout=500)
+            if button.count() != 1:
+                raise SleeperPlaywrightTransportError(
+                    f"Sleeper did not expose exactly one DRAFT button for {player_name!r}."
+                )
             if not button.is_visible():
                 raise SleeperPlaywrightTransportError(
                     f"Sleeper's exact DRAFT button was not visible for {player_name!r}."
