@@ -1,0 +1,25 @@
+# Python bytecode and test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments and local tooling
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime state: can contain draft-specific observations or browser details.
+runtime/
+*.local.json
+
+# Editors and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

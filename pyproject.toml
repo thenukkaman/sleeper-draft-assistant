@@ -1,0 +1,32 @@
+[project]
+name = "kenikh-sleeper-draft-assistant"
+version = "0.1.0"
+description = "Source-board-driven, fail-closed Sleeper draft assistant"
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "Proprietary" }
+authors = [{ name = "kenikh" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+sleeper-draft-assistant = "draft_assistant.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["draft_assistant", "draft_assistant.adapters", "draft_assistant.interfaces", "draft_assistant.policies"]
+
+[tool.setuptools.package-data]
+draft_assistant = ["board.json"]
+
+[tool.unittest]
+start-directory = "tests"
