@@ -82,6 +82,9 @@ The browser executor may act only when all of these are true:
 1. League ID is `1314724839730204672` and username is `kenikh`.
 2. Sleeper reports `drafting`, auto-pick is visibly off, and the live pick number is exactly the next `kenikh` pick.
 3. The policy has returned one named player; that exact normalized name is still available in the Sleeper UI.
+   The browser adapter must additionally identify a live semantic **DRAFT**
+   control for that row. A player card and Sleeper's purple queue icon are
+   different controls and may never be used as a substitute.
 4. An `AVOID` player is marked by the policy as a genuine falling-price value; it is never an automatic ban or an automatic pick.
 5. A `CHECK_NEWS` player has a fresh (15 minutes or less), source-linked, `CLEAR` live-news review. A missing, stale, or blocked review fails closed.
 6. In Round 17, the selected DST is present in the currently visible Sleeper-ranked DST list; in Round 18, the same is true for the kicker list.

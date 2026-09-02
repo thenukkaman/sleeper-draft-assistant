@@ -137,6 +137,16 @@ class ClockFirstDraftDriver:
         primary = recommendation.primary
         if primary is None:
             return DraftAttempt(False, False, None, recommendation, commit_gate, "No named player was returned.", recovery)
+        if not commit.has_draft_action(primary.player.name):
+            return DraftAttempt(
+                False,
+                False,
+                None,
+                recommendation,
+                commit_gate,
+                "Sleeper did not expose an exact semantic DRAFT control for the recommended player; do not click a queue or details control.",
+                recovery,
+            )
         room.draft(primary.player.name)
         published = room.observe()
         recorded = {normalize_name(name) for name in published.drafted_players}

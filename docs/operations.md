@@ -23,6 +23,10 @@ Before a live browser executor is considered for an unattended draft, it must:
 3. Obtain the active pick, timer, auto-pick state, available player row, and
    confirmation from structured DOM/accessibility data; viewport visibility is
    only a fallback.
+   The adapter must distinguish a row's **DRAFT** action from its player-card
+   and queue actions. The purple paper icon is a Sleeper queue action, not a
+   pick submission; neither it nor a player-card click may be treated as a
+   draft.
 4. Poll or subscribe quickly enough to make a decision and a verification well
    within the pick clock.
 5. Stop, preserve state, and notify when it sees an unexpected dialog,
@@ -65,6 +69,15 @@ those records. The run is a pass only if:
 The post-mortem must list every exception with its raw reason, not merely an
 aggregate count. A later approval threshold can be made stricter once enough
 latency data exists.
+
+## Fast-mock profile
+
+The CPU mock is the latency worst case, not a simulation of the live room:
+opponents can resolve almost immediately, while live human turns may last one
+second to two minutes. Every action cycle must therefore re-observe the draft,
+derive availability, submit through the semantic DRAFT control, and verify the
+published pick fast enough for the mock. That same ceiling covers live-human
+timing without assuming that opponents will consume their full clocks.
 
 ## Auto-pick incident response
 

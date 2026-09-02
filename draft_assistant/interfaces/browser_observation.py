@@ -3,8 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from ..models import DraftState, NewsReview
+
+
+class PlayerRowAction(StrEnum):
+    """A semantic action exposed for one visible Sleeper player row.
+
+    A player card, a queue icon, and a draft action are deliberately distinct.
+    An executor must never infer that clicking a player name or queue control
+    will submit a pick.
+    """
+
+    DRAFT = "draft"
+    QUEUE = "queue"
+    DETAILS = "details"
 
 
 @dataclass(frozen=True)
@@ -24,6 +38,19 @@ class BrowserObservation:
     available_players: frozenset[str] | None = None
     news_reviews: dict[str, NewsReview] | None = None
     sleeper_ranked_specialists: dict[str, tuple[str, ...]] | None = None
+    player_row_actions: dict[str, frozenset[PlayerRowAction]] | None = None
+
+    def has_draft_action(self, player_name: str) -> bool:
+        """Whether the current UI exposes an exact *draft* control for a name.
+
+        ``None`` preserves compatibility with read-only and legacy test
+        observations. A production browser adapter must always populate this
+        field; an empty or queue/details-only action set is not draftable.
+        """
+
+        if self.player_row_actions is None:
+            return True
+        return PlayerRowAction.DRAFT in self.player_row_actions.get(player_name, frozenset())
 
     def to_state(self) -> DraftState:
         return DraftState(

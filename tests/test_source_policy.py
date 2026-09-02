@@ -6,7 +6,7 @@ import unittest
 
 from draft_assistant.autonomy import AutonomousDraftGuard
 from draft_assistant.board import load_default_board
-from draft_assistant.interfaces.browser_observation import BrowserObservation
+from draft_assistant.interfaces.browser_observation import BrowserObservation, PlayerRowAction
 from draft_assistant.interfaces.sleeper_draftboard import parse_visible_draftboard
 from draft_assistant.live_driver import ClockFirstDraftDriver
 from draft_assistant.models import DraftState, NewsDecision, NewsReview
@@ -263,6 +263,42 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertFalse(attempt.confirmed)
         self.assertEqual(room.picks, ["Josh Allen"])
         self.assertIn("do not retry", attempt.reason)
+
+    def test_clock_driver_refuses_player_card_or_queue_actions(self) -> None:
+        class Room:
+            def __init__(self, observation):
+                self.observation = observation
+                self.picks = []
+
+            def observe(self):
+                return self.observation
+
+            def draft(self, player_name):
+                self.picks.append(player_name)
+
+        observation = BrowserObservation(
+            league_id="league-1",
+            username="kenikh",
+            draft_status="drafting",
+            auto_pick_enabled=False,
+            round_number=1,
+            pick_label="1.05",
+            current_pick_number=5,
+            our_pick_number=5,
+            roster_positions=(),
+            drafted_players=frozenset(),
+            available_players=frozenset({"Josh Allen", "Lamar Jackson", "Drake Maye"}),
+            player_row_actions={"Josh Allen": frozenset({PlayerRowAction.QUEUE, PlayerRowAction.DETAILS})},
+        )
+
+        attempt = ClockFirstDraftDriver(
+            self.board,
+            self.policy,
+            AutonomousDraftGuard("league-1", "kenikh"),
+        ).run_once(Room(observation))
+
+        self.assertFalse(attempt.acted)
+        self.assertIn("semantic DRAFT control", attempt.reason)
 
     def test_clock_driver_disables_auto_pick_then_salvages_the_live_pick(self) -> None:
         class Room:
