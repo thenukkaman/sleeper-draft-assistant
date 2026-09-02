@@ -92,7 +92,10 @@ retrying a previous click, or changing auto-pick—on any of the following:
 - an unresponsive DOM/accessibility transport.
 
 The mock-start path is a separate preflight capability, not part of the pick
-transaction. Its observed sequence is: league pre-draft page -> `MOCK DRAFTS`
+transaction. **Always begin at the canonical league pre-draft URL below.** Its
+observed sequence is: league pre-draft page -> the `MOCK DRAFTS` button in the
+league draftboard card (not the sidebar link and not the generic
+`/draftboards` page) -> `NEW MOCK DRAFT`
 -> `NEW MOCK DRAFT` -> the mock board's `START DRAFT` control. It may only
 activate that exact control in a mock run; it must never use this path for the
 scheduled live league draft. Unknown dialogs are never auto-accepted. After
