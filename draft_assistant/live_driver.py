@@ -7,7 +7,8 @@ module joins the two for one guarded, non-blocking draft attempt.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime, timezone
+from typing import Callable, Protocol
 
 from .autonomy import AutonomousDraftGuard, ExecutionGate
 from .board import Board, normalize_name
@@ -35,6 +36,13 @@ class AutoPickControllableDraftRoom(DraftRoom, Protocol):
     def set_auto_pick(self, enabled: bool) -> None: ...
 
 
+AttemptEventRecorder = Callable[[str, datetime], None]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @dataclass(frozen=True)
 class AutoPickRecovery:
     """Evidence from a single auto-pick remediation attempt.
@@ -60,21 +68,48 @@ class DraftAttempt:
     gate: ExecutionGate
     reason: str
     auto_pick_recovery: AutoPickRecovery | None = None
+    final_observation: BrowserObservation | None = None
 
 
 class ClockFirstDraftDriver:
     """Read, decide, recheck, and click in one clock-sensitive operation."""
 
-    def __init__(self, board: Board, policy: DraftPolicy, guard: AutonomousDraftGuard) -> None:
+    def __init__(
+        self,
+        board: Board,
+        policy: DraftPolicy,
+        guard: AutonomousDraftGuard,
+        now: Callable[[], datetime] = _utc_now,
+    ) -> None:
         self.board = board
         self.policy = policy
         self.guard = guard
+        self.now = now
 
-    def run_once(self, room: DraftRoom, prepared: PreparedPick | None = None) -> DraftAttempt:
-        first = room.observe()
+    def run_once(
+        self,
+        room: DraftRoom,
+        prepared: PreparedPick | None = None,
+        initial_observation: BrowserObservation | None = None,
+        record_event: AttemptEventRecorder | None = None,
+    ) -> DraftAttempt:
+        """Attempt one guarded pick using a pre-read observation when supplied.
+
+        The persistent runner passes its poll result as ``initial_observation``
+        so the action path never spends a second DOM read before considering a
+        live clock. Event timestamps intentionally sit at this interface
+        boundary: they measure browser control without leaking it into policy.
+        """
+
+        def event(name: str) -> None:
+            if record_event is not None:
+                record_event(name, self.now())
+
+        first = initial_observation or room.observe()
+        event("initial_observation")
         if first.blocker is not None:
             return self._blocked_by_browser(first, None)
-        recovery = self._recover_auto_pick(room, first)
+        recovery = self._recover_auto_pick(room, first, event)
         if recovery is not None:
             if not recovery.recovered or recovery.pick_was_missed:
                 state = room.observe().to_state()
@@ -90,7 +125,9 @@ class ClockFirstDraftDriver:
                     recovery,
                 )
             first = room.observe()
+            event("post_recovery_observation")
         recommendation = self._recommend(first.to_state(), prepared)
+        event("recommendation_ready")
         gate = self.guard.evaluate(first.to_state(), recommendation)
         if not gate.allowed:
             return DraftAttempt(
@@ -105,9 +142,10 @@ class ClockFirstDraftDriver:
 
         # The UI may change in the milliseconds between recommendation and click.
         commit = room.observe()
+        event("commit_observation")
         if commit.blocker is not None:
             return self._blocked_by_browser(commit, recovery)
-        commit_recovery = self._recover_auto_pick(room, commit)
+        commit_recovery = self._recover_auto_pick(room, commit, event)
         if commit_recovery is not None:
             recovery = commit_recovery
             if not recovery.recovered or recovery.pick_was_missed:
@@ -116,7 +154,9 @@ class ClockFirstDraftDriver:
                 gate = self.guard.evaluate(state, recommendation)
                 return DraftAttempt(False, False, None, recommendation, gate, recovery.reason, recovery)
             commit = room.observe()
+            event("post_recovery_commit_observation")
             recommendation = self._recommend(commit.to_state(), prepared)
+            event("recommendation_ready")
         commit_gate = self.guard.evaluate(commit.to_state(), recommendation)
         if not commit_gate.allowed:
             return DraftAttempt(
@@ -152,8 +192,10 @@ class ClockFirstDraftDriver:
                 "Sleeper did not expose an exact semantic DRAFT control for the recommended player; do not click a queue or details control.",
                 recovery,
             )
+        event("selection_requested")
         room.draft(primary.player.name)
         published = room.observe()
+        event("published_observation")
         recorded = {normalize_name(name) for name in published.drafted_players}
         if normalize_name(primary.player.name) not in recorded:
             # An ambiguous click must never trigger an automatic second click.
@@ -165,6 +207,7 @@ class ClockFirstDraftDriver:
                 commit_gate,
                 "Draft click was submitted but Sleeper did not publish the named player; do not retry automatically.",
                 recovery,
+                published,
             )
         if published.current_pick_number == commit.current_pick_number:
             return DraftAttempt(
@@ -175,6 +218,7 @@ class ClockFirstDraftDriver:
                 commit_gate,
                 "Sleeper recorded the player but the draft clock did not advance; do not retry automatically.",
                 recovery,
+                published,
             )
         return DraftAttempt(
             True,
@@ -184,6 +228,7 @@ class ClockFirstDraftDriver:
             commit_gate,
             "Draft click verified in Sleeper.",
             recovery,
+            published,
         )
 
     def _recommend(self, state, prepared: PreparedPick | None) -> Recommendation:
@@ -222,12 +267,17 @@ class ClockFirstDraftDriver:
             recovery,
         )
 
-    @staticmethod
-    def _recover_auto_pick(room: DraftRoom, observation: BrowserObservation) -> AutoPickRecovery | None:
+    def _recover_auto_pick(
+        self,
+        room: DraftRoom,
+        observation: BrowserObservation,
+        event: Callable[[str], None],
+    ) -> AutoPickRecovery | None:
         """Disable auto-pick first, then prove the same pick is still salvageable."""
 
         if observation.auto_pick_enabled is not True:
             return None
+        event("auto_pick_detected")
         toggle = getattr(room, "set_auto_pick", None)
         if not callable(toggle):
             return AutoPickRecovery(
@@ -238,8 +288,10 @@ class ClockFirstDraftDriver:
                 after_pick_number=None,
                 reason="Auto-pick is enabled but this draft-room adapter cannot disable it; action is blocked.",
             )
+        event("auto_pick_disable_requested")
         toggle(False)
         after = room.observe()
+        event("auto_pick_disabled_observed")
         if after.auto_pick_enabled is not False:
             return AutoPickRecovery(
                 attempted=True,

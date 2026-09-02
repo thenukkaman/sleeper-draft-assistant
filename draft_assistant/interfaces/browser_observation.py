@@ -70,6 +70,8 @@ class BrowserObservation:
     our_pick_number: int
     roster_positions: tuple[str, ...]
     drafted_players: frozenset[str]
+    clock_remaining_ms: int | None = None
+    clock_precision_ms: int | None = None
     available_players: frozenset[str] | None = None
     news_reviews: dict[str, NewsReview] | None = None
     sleeper_ranked_specialists: dict[str, tuple[str, ...]] | None = None

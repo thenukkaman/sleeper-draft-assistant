@@ -19,7 +19,10 @@ pick-submission implementation in this repository.
 Before a live browser executor is considered for an unattended draft, it must:
 
 1. Run as a persistent process independent of conversational context.
-2. Keep a compact, durable record of the latest observation and action result.
+2. Keep a compact, append-only record of the latest observation and action
+   result. `JsonlRunnerJournal` is the approved local mechanism; place it
+   under ignored `runtime/` and never include cookies, browser profiles,
+   account tokens, or screenshots in the journal.
 3. Obtain the active pick, timer, auto-pick state, available player row, and
    confirmation from structured DOM/accessibility data; viewport visibility is
    only a fallback.

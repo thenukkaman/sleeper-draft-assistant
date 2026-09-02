@@ -16,6 +16,7 @@ draft_assistant/          Installable Python package
   policies/               Swappable recommendation strategies
   interfaces/             Neutral browser/news/draftboard contracts
   adapters/               External-service translation (read-only today)
+  persistent_runner.py    Clock-edge orchestration and timing evidence
 tests/                    Fast deterministic unit tests
 fixtures/                 Reproducible local draft states
 draft_assistant/stress.py Structured test telemetry and post-mortem metrics
@@ -50,11 +51,12 @@ models.py                  Stable data types: player/tag/news-review/draft-state
 adapters/sleeper_readonly  Read-only live-state adapter; it never submits a selection
 autonomy.py                Fail-closed gate before any browser executor takes action
 interfaces/browser_observation.py  Normalizes the visible Sleeper draft-room state for the engine
+persistent_runner.py       Prepares ahead after opponent picks; emits one timing record per action path
 interfaces/live_news.py            Pluggable real-time research contract for CHECK_NEWS players
 cli.py                     Thin presentation layer for local JSON state or Sleeper state
 ```
 
-The policy has no network or browser imports. A future policy can replace `SourceBoardPolicy` without changing the data adapter or the interface. The browser side supplies only a `BrowserObservation`; it cannot change how players are ranked.
+The policy has no network or browser imports. A future policy can replace `SourceBoardPolicy` without changing the data adapter or the interface. The browser side supplies only a `BrowserObservation`; it cannot change how players are ranked. `PersistentDraftRunner` is likewise browser-neutral: a concrete browser process schedules its `poll_once` method, while the runner preserves the prepared candidate ladder and returns durable timing evidence rather than sleeping, taking screenshots, or issuing selectors itself.
 
 ## Local test
 

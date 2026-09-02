@@ -11,11 +11,9 @@ a new season without reworking the decision engine or browser layer.
 ```text
 board.json -> board.py -> policies/ -> Recommendation
                                      |
-Browser/API adapter -> BrowserObservation -> DraftState -+
-                                     |
-                               autonomy.py
-                                     |
-                           future browser executor
+Browser/API adapter -> BrowserObservation -> PersistentDraftRunner -> ClockFirstDraftDriver
+                                     |                    |                       |
+                                     +----------------> DraftState <---------- autonomy.py
 ```
 
 The arrows are intentional:
@@ -30,10 +28,17 @@ The arrows are intentional:
   Sleeper adapter is public-API read-only by design.
 - `autonomy.py` is a fail-closed action gate. It may approve an executor's
   proposed selection, but it never controls a browser itself.
+- `persistent_runner.py` retains only the latest completed poll and prepared
+  candidate ladder. It accepts browser observations and emits timing evidence;
+  it does not implement selectors, credentials, sleeps, or a scheduler.
 
 ## Execution boundary
 
-The `ClockFirstDraftDriver` demonstrates the required transaction:
+The persistent runner's concrete browser process calls `poll_once` on its
+chosen cadence. It prepares a ladder after every opponent observation and
+hands the observed live clock directly to `ClockFirstDraftDriver`, avoiding a
+redundant initial browser read. The driver then performs the required
+transaction:
 
 1. Observe the draft room.
 2. Form a recommendation.
@@ -45,6 +50,13 @@ An ambiguous click is never retried automatically. A live runner must retain
 its own durable state and use structured DOM/accessibility data rather than
 screen position as its primary signal. The mock-draft test showed why this is a
 non-negotiable production constraint.
+
+Every transaction emits raw timing events: poll start, first live observation,
+recommendation ready, selection request, publication observation, and—in the
+auto-pick path—detection, toggle request, and confirmed toggle-off. The
+telemetry layer derives its clock-edge estimate from Sleeper's displayed
+countdown and preserves its precision rather than treating it as a server-side
+timestamp.
 
 Mock setup is intentionally outside that transaction. A mock-only preflight
 adapter may navigate from the league pre-draft page through `MOCK DRAFTS` and
