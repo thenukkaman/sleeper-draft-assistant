@@ -46,6 +46,12 @@ its own durable state and use structured DOM/accessibility data rather than
 screen position as its primary signal. The mock-draft test showed why this is a
 non-negotiable production constraint.
 
+Mock setup is intentionally outside that transaction. A mock-only preflight
+adapter may navigate from the league pre-draft page through `MOCK DRAFTS` and
+`NEW MOCK DRAFT` to the mock board's exact `START DRAFT` control. It must
+produce a fresh browser observation after that transition; the live runner
+never treats a preflight control as a player selection.
+
 ## Annual refresh
 
 For a new season, start by replacing `draft_assistant/board.json`. Update

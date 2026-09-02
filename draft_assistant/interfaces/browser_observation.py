@@ -28,7 +28,7 @@ class BrowserBlockerKind(StrEnum):
     describe the browser's ability to act, not the fantasy-football policy.
     """
 
-    PRE_DRAFT_CONFIRMATION = "pre_draft_confirmation"
+    MOCK_DRAFT_READY = "mock_draft_ready"
     UNEXPECTED_DIALOG = "unexpected_dialog"
     PENDING_REQUEST = "pending_request"
     UNRESPONSIVE = "unresponsive"

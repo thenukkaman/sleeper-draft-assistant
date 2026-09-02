@@ -41,23 +41,26 @@ Every browser observation must include either a clear page or a structured
 `BrowserBlocker`. The executor must fail closed—without clicking a player,
 retrying a previous click, or changing auto-pick—on any of the following:
 
-- a pre-draft confirmation (record its exact normalized text and buttons);
+- the known mock-only preflight surface (record the exact `START DRAFT`
+  control and its surrounding state);
 - an unexpected visible dialog or overlay;
 - a request that remains a spinner beyond the executor's bounded read/action
   deadline; or
 - an unresponsive DOM/accessibility transport.
 
-The start-confirmation path is a separate preflight capability, not part of
-the pick transaction. It may only accept a known, exact Sleeper confirmation
-after it is observed and explicitly authorized for that run. Unknown dialogs
-are never auto-accepted. After any resolution, the executor must read a fresh,
-clear browser state before entering the clock-first pick flow.
+The mock-start path is a separate preflight capability, not part of the pick
+transaction. Its observed sequence is: league pre-draft page -> `MOCK DRAFTS`
+-> `NEW MOCK DRAFT` -> the mock board's `START DRAFT` control. It may only
+activate that exact control in a mock run; it must never use this path for the
+scheduled live league draft. Unknown dialogs are never auto-accepted. After
+the mock starts, the executor must read a fresh, clear browser state before
+entering the clock-first pick flow.
 
 This distinction matters in the observed Sleeper mock-creation failure: the
 `NEW MOCK DRAFT` control became a spinner and the page stayed on the lobby;
-there was no active Sleeper start-confirmation dialog. Treating that as a
-confirmation and clicking arbitrary controls would be unsafe and would hide
-the actual request failure.
+the runner never reached the mock board's `START DRAFT` control. Treating that
+as a confirmation and clicking arbitrary controls would be unsafe and would
+hide the actual request failure.
 
 ## Local workflow
 

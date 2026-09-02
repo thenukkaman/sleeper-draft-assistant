@@ -354,7 +354,7 @@ class SourceBoardPolicyTests(unittest.TestCase):
         self.assertIn("pending_request", attempt.gate.reasons[-1])
         self.assertIn("Browser UI is blocked", attempt.reason)
 
-    def test_clock_driver_stops_if_a_confirmation_appears_before_commit(self) -> None:
+    def test_clock_driver_stops_if_mock_preflight_is_visible_before_commit(self) -> None:
         class Room:
             def __init__(self, first, blocked):
                 self.observations = [first, blocked]
@@ -382,9 +382,9 @@ class SourceBoardPolicyTests(unittest.TestCase):
         blocked = replace(
             first,
             blocker=BrowserBlocker(
-                BrowserBlockerKind.PRE_DRAFT_CONFIRMATION,
-                "Are you sure you want to start the draft",
-                ("Cancel", "Start Draft"),
+                BrowserBlockerKind.MOCK_DRAFT_READY,
+                "Mock board is ready and exposes the START DRAFT control.",
+                ("START DRAFT",),
             ),
         )
         room = Room(first, blocked)
@@ -397,7 +397,7 @@ class SourceBoardPolicyTests(unittest.TestCase):
 
         self.assertFalse(attempt.acted)
         self.assertEqual(room.picks, [])
-        self.assertIn("pre_draft_confirmation", attempt.gate.reasons[-1])
+        self.assertIn("mock_draft_ready", attempt.gate.reasons[-1])
 
     def test_clock_driver_disables_auto_pick_then_salvages_the_live_pick(self) -> None:
         class Room:
